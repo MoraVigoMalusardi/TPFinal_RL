@@ -5,6 +5,7 @@ import yaml
 import argparse
 import logging
 import warnings
+import csv
 from ray.rllib.agents.ppo import PPOTrainer
 
 # Importa el wrapper de entorno tal como en el tutorial
@@ -267,29 +268,62 @@ def train(trainer, num_iters=5):
     """
     Entrena el PPOTrainer por num_iters iteraciones e imprime reward medio.
     """
+    history = []
+
     for it in range(num_iters):
         print(f"\n********** Iteración: {it} **********")
         result = trainer.train()
         
-        # Información detallada de las métricas
-        reward_mean = result.get('episode_reward_mean', 'N/A')
-        reward_min = result.get('episode_reward_min', 'N/A')
-        reward_max = result.get('episode_reward_max', 'N/A')
-        episodes_this_iter = result.get('episodes_this_iter', 0)
-        episodes_total = result.get('episodes_total', 0)
-        timesteps_total = result.get('timesteps_total', 0)
-        
-        print(f"  Episodes this iter: {episodes_this_iter}")
-        print(f"  Episodes total: {episodes_total}")
-        print(f"  Timesteps total: {timesteps_total}")
-        print(f"  Reward mean: {reward_mean}")
-        print(f"  Reward min: {reward_min}")
-        print(f"  Reward max: {reward_max}")
+        # Métricas globales por episodio
+        episode_reward_mean = result.get("episode_reward_mean")
+        episode_reward_min = result.get("episode_reward_min")
+        episode_reward_max = result.get("episode_reward_max")
+        episode_len_mean = result.get("episode_len_mean")
+        episodes_this_iter = result.get("episodes_this_iter")
+        episodes_total = result.get("episodes_total")
+        timesteps_total = result.get("timesteps_total")
+        training_iteration = result.get("training_iteration")
+
+        # Métricas por policy (multi-agent)
+        policy_reward_mean = result.get("policy_reward_mean", {})
+        policy_reward_min = result.get("policy_reward_min", {})
+        policy_reward_max = result.get("policy_reward_max", {})
+
+        a_mean = policy_reward_mean.get("a")
+        p_mean = policy_reward_mean.get("p")
+        a_min = policy_reward_min.get("a")
+        p_min = policy_reward_min.get("p")
+        a_max = policy_reward_max.get("a")
+        p_max = policy_reward_max.get("p")
+
+        print(f"episode_reward_mean: {episode_reward_mean}")
+        print(f"policy_reward_mean: a={a_mean}, p={p_mean}")
+
+        # Guardamos una fila de info resumida para esta iteración
+        row = {
+            "iteration": training_iteration if training_iteration is not None else it,
+            "timesteps_total": timesteps_total,
+            "episodes_total": episodes_total,
+            "episodes_this_iter": episodes_this_iter,
+            "episode_reward_min": episode_reward_min,
+            "episode_reward_max": episode_reward_max,
+            "episode_reward_mean": episode_reward_mean,
+            "episode_len_mean": episode_len_mean,
+            "policy_a_reward_mean": a_mean,
+            "policy_a_reward_min": a_min,
+            "policy_a_reward_max": a_max,
+            "policy_p_reward_mean": p_mean,
+            "policy_p_reward_min": p_min,
+            "policy_p_reward_max": p_max,
+        }
+
+        history.append(row)
         
         # Mostrar info de políticas individuales si está disponible
         if 'policy_reward_mean' in result:
             print(f"  Policy rewards: {result['policy_reward_mean']}")
 
+    return history
 
 # -------------------------------------------------------------------
 # 5) Rollout de evaluación con la política entrenada
@@ -328,6 +362,23 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
     for agent_id, r in total_rewards.items():
         print(f"    {agent_id}: {r}")
 
+def save_history_to_csv(history, filepath):
+    """
+    Guarda el historial de entrenamiento en un archivo CSV.
+    
+    Args:
+        history: Lista de diccionarios con métricas por iteración
+        filepath: Ruta del archivo CSV donde guardar
+    """
+    csv_path = "ppo_results.csv"
+    fieldnames = list(history[0].keys())
+
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(history)
+        
+    print(f"\nHistorial de entrenamiento guardado en: {csv_path}")
 
 # -------------------------------------------------------------------
 # 6) main()
@@ -376,7 +427,7 @@ def main():
     logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
     
     # Entrenamiento
-    train(trainer, num_iters=num_iterations)
+    history = train(trainer, num_iters=num_iterations)
     
     # Episodio de evaluación para probar el entorno
     logger.info("\nEjecutando episodio de evaluación...")
