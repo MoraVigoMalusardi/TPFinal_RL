@@ -296,6 +296,21 @@ def train(trainer, num_iters=5):
         a_max = policy_reward_max.get("a")
         p_max = policy_reward_max.get("p")
 
+    
+        kl_a = result["info"]['learner']['a']['kl']
+        entropy_a = result["info"]['learner']['a']['entropy']
+
+        # Descomentar cuando se entrene planner
+
+        #kl_p = result["info"]['learner']['p']['kl']
+        #entropy_p = result["info"]['learner']['p']['entropy']
+
+        #print(f"KL Divergence: a={kl_a}, p={kl_p}")
+        #print(f"Entropy: a={entropy_a}, p={entropy_p}")
+
+        print(f"KL Divergence (policy a): {kl_a}")
+        print(f"Entropy (policy a): {entropy_a}")
+
         print(f"episode_reward_mean: {episode_reward_mean}")
         print(f"policy_reward_mean: a={a_mean}, p={p_mean}")
 
@@ -315,14 +330,43 @@ def train(trainer, num_iters=5):
             "policy_p_reward_mean": p_mean,
             "policy_p_reward_min": p_min,
             "policy_p_reward_max": p_max,
+            "kl_a": kl_a,
+            "entropy_a": entropy_a 
+            #,  DESCOMENTAR CUANDO SE ENTRENE PLANNER
+            #"kl_p": kl_p, 
+            #"entropy_p": entropy_p,
+            
         }
 
+       
         history.append(row)
         
         # Mostrar info de políticas individuales si está disponible
         if 'policy_reward_mean' in result:
             print(f"  Policy rewards: {result['policy_reward_mean']}")
 
+    
+    # Guardar checkpoint al final del entrenamiento en directorio: checkpoints/ como un pkl
+
+    # checkpoint_dir = trainer.save(checkpoint_dir="checkpoints")
+    # print(f"\nCheckpoint guardado en: {checkpoint_dir}")
+
+    import torch, os
+
+    os.makedirs("checkpoints", exist_ok=True)
+
+    # guardar pesos de la política 'a'
+    torch.save(
+        trainer.get_policy("a").model.state_dict(),
+        "checkpoints/policy_a_weights.pt"
+    )
+
+    # si tenés planner 'p', guardalo también
+    if "p" in trainer.workers.local_worker().policy_map:
+        torch.save(
+            trainer.get_policy("p").model.state_dict(),
+            "checkpoints/policy_p_weights.pt"
+    )
     return history
 
 # -------------------------------------------------------------------
@@ -428,6 +472,9 @@ def main():
     
     # Entrenamiento
     history = train(trainer, num_iters=num_iterations)
+
+    # Guardar historial a CSV
+    save_history_to_csv(history, os.path.join(run_dir, "ppo_results.csv"))
     
     # Episodio de evaluación para probar el entorno
     logger.info("\nEjecutando episodio de evaluación...")
