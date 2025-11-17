@@ -142,10 +142,6 @@ def create_env_for_inspection(env_config):
 
 
 # -------------------------------------------------------------------
-# 2) Definición de políticas multi-agente (agentes + planner)
-# -------------------------------------------------------------------
-def build_multiagent_policies(env_obj, run_configuration):
-    # -------------------------------------------------------------------
 # 3) Definición de políticas multi-agente (agentes + planner)
 # -------------------------------------------------------------------
 
@@ -191,7 +187,7 @@ def build_multiagent_policies(env_obj, run_configuration):
         "max_seq_len": agent_model_config.get("max_seq_len", 25),
         "vf_share_layers": False,
     }
-    
+
     # Modelo para planner (en fase 1 típicamente no se usa/entrena)
     planner_model_config = planner_policy_config.get("model", {})
     planner_model = {
@@ -202,7 +198,7 @@ def build_multiagent_policies(env_obj, run_configuration):
         "max_seq_len": planner_model_config.get("max_seq_len", 25),
         "vf_share_layers": False,
     }
-    
+
     policies = {
         "a": (
             None,
@@ -468,7 +464,7 @@ def save_history_to_csv(history, filepath):
     filepath : str
         Ruta de salida para el CSV.
     """
-    csv_path = "ppo_results.csv"
+    csv_path = "ppo_results_saez.csv"
     fieldnames = list(history[0].keys())
 
     with open(csv_path, "w", newline="") as f:
@@ -516,7 +512,7 @@ def main():
 
     history = train(trainer, num_iters=num_iterations)
 
-    save_history_to_csv(history, os.path.join(run_dir, "ppo_results.csv"))
+    save_history_to_csv(history, os.path.join(run_dir, "ppo_results_saez.csv"))
 
     logger.info("\nEjecutando episodio de evaluación...")
     episode_length = env_config.get("episode_length", 1000)
