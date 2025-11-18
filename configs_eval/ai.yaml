@@ -45,18 +45,18 @@ env:
   planner_gets_spatial_info: false
   planner_reward_type: coin_eq_times_productivity
   scenario_name: layout_from_file/simple_wood_and_stone
-  starting_agent_coin: 0
+  starting_agent_coin: 10
   world_size:
   - 25
   - 25
 general:
-  ckpt_frequency_steps: 20000000
+  ckpt_frequency_steps: 750000
   cpus: 15
-  episodes: 4000000
+  episodes: 25000
   gpus: 0
-  restore_tf_weights_agents: checkpoints/policy_a_weights.pt #phase1/ckpts/agent.tf.weights.global-step-25000000 # path to phase 1 agent policy checkpoint
+  restore_tf_weights_agents: 'checkpoints/policy_a_weights_w_planner.pt'
   restore_tf_weights_planner: ''
-  train_planner: true
+  train_planner: false
 agent_policy:
   clip_param: 0.3
   entropy_coeff: 0.025

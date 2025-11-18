@@ -61,6 +61,9 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
         obs = env_obj.reset()
         done = {"__all__": False}
         step = 0
+
+        initial_coins = [agent.total_endowment('Coin') for agent in env_obj.env.world.agents]
+        print(f"\n  Initial coins: {[f'{c:.1f}' for c in initial_coins]}")
         
         while not done["__all__"] and step < max_steps:
             actions = {}
@@ -68,8 +71,20 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                 policy_id = "a" if str(agent_id).isdigit() else "p"
                 action = trainer.compute_action(ob, policy_id=policy_id)
                 actions[agent_id] = action
+
+                #cada 100 pasos imprimo la accion tomada por cada agente
+                if step % 100 == 0:
+                    print(f"    Agent {agent_id} took action {action}")
             
-            obs, rew, done, info = env_obj.step(actions)
+            obs, rew, done, info = env_obj.step(actions)    
+            if step % 100 == 0:
+                print(f"    Step {step+1} done with rewards {rew}")
+
+                current_coins = [agent.total_endowment('Coin') for agent in env_obj.env.world.agents]
+                print(f"    Current coins: {[f'{c:.1f}' for c in current_coins]}")
+
+                coin_changes = [curr - init for curr, init in zip(current_coins, initial_coins)]
+                print(f"    Total change: {[f'{c:+.1f}' for c in coin_changes]}")
             step += 1
         
         # Calcular métricas finales del episodio
@@ -117,8 +132,10 @@ def compare_all_policies():
     ray.init(ignore_reinit_error=True, log_to_driver=False)
     
     # 1. Free Market (sin impuestos)
+
+    config = 'configs_eval/free_market.yaml' #ACA VA LA CONFIG DE EVALUACION DE FREE MARKET
     print("\n Cargando pesos del Free Market...")
-    with open('configs_eval/free_market.yaml', 'r') as f:
+    with open(config, 'r') as f:   
         free_config = yaml.safe_load(f)
     
     env_config = build_env_config(free_config)
@@ -127,25 +144,27 @@ def compare_all_policies():
     free_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
     
     
-    agent_weights = torch.load('checkpoints/policy_a_weights.pt', map_location='cpu')
+    agent_weights = torch.load('checkpoints/policy_a_weights.pt', map_location='cpu') #ACA VA EL CHECKPOINT DE FREE MARKET (LOS PRIMEROS AGENTES QUE ENTRENAMOS)
     free_trainer.get_policy("a").model.load_state_dict(agent_weights)
     
 
     print("Pesos cargados")
     
     results_free_market = evaluate_policy(
-        'configs_eval/free_market.yaml',
+        config,
         'Free Market',
         trainer=free_trainer,
-        n_episodes=5
+        n_episodes=10
     )
 
     free_trainer.stop()
     
     # 2. US Federal
 
-    print("\n🔄 Cargando pesos del US Federal...")
-    with open('configs_eval/us_fed.yaml', 'r') as f:
+    config = 'configs_eval/us_fed.yaml'  #ACA VA LA CONFIG DE EVALUACION DE US FEDERAL
+
+    print("\n Cargando pesos del US Federal...")
+    with open(config, 'r') as f:
         us_fed_config = yaml.safe_load(f)
     
     env_config = build_env_config(us_fed_config)
@@ -153,47 +172,55 @@ def compare_all_policies():
     trainer_config = build_trainer_config(env_obj, us_fed_config, env_config)
     us_fed_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
     
-    agent_weights = torch.load('checkpoints/us_federal/policy_a_weights.pt', map_location='cpu')
+    agent_weights = torch.load('checkpoints/us_fed/policy_a_weights.pt', map_location='cpu')
     us_fed_trainer.get_policy("a").model.load_state_dict(agent_weights)
     
 
     print("Pesos cargados")
     
     results_us_federal = evaluate_policy(
-        'configs_eval/us_fed.yaml',
+        config,
         'US Federal',
         trainer=us_fed_trainer,
-        n_episodes=5
+        n_episodes=10
     )
 
     us_fed_trainer.stop()
     
-    print("\n Cargando pesos de Saez Formula...")
-    with open('configs_eval/saez.yaml', 'r') as f:
-        saez_config = yaml.safe_load(f)
+    # # 3. Saez Formula 
+
+    # config = 'configs_eval/saez.yaml'  #ACA VA LA CONFIG DE EVALUACION DE SAEZ FORMULA
+
+    # print("\n Cargando pesos de Saez Formula...")
+    # with open(config, 'r') as f:
+    #     saez_config = yaml.safe_load(f)
     
-    env_config = build_env_config(saez_config)
-    env_obj = create_env_for_inspection(env_config)
-    trainer_config = build_trainer_config(env_obj, saez_config, env_config)
-    saez_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
+    # env_config = build_env_config(saez_config)
+    # env_obj = create_env_for_inspection(env_config)
+    # trainer_config = build_trainer_config(env_obj, saez_config, env_config)
+    # saez_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
     
-    agent_weights = torch.load('checkpoints/saez/policy_a_weights.pt', map_location='cpu')
-    saez_trainer.get_policy("a").model.load_state_dict(agent_weights)
+    # agent_weights = torch.load('checkpoints/saez/policy_a_weights.pt', map_location='cpu')
+    # saez_trainer.get_policy("a").model.load_state_dict(agent_weights)
     
 
-    print("Pesos cargados")
+    # print("Pesos cargados")
     
-    results_saez = evaluate_policy(
-        'configs_eval/saez.yaml',
-        'Saez Formula',
-        trainer=saez_trainer,
-        n_episodes=5
-    )
-    saez_trainer.stop()
+    # results_saez = evaluate_policy(
+    #     config,
+    #     'Saez Formula',
+    #     trainer=saez_trainer,
+    #     n_episodes=10
+    # )
+    # saez_trainer.stop()
 
     # 4. AI Economist (cargar pesos entrenados)
     print("\n Cargando pesos del AI Economist...")
-    with open('configs_eval/ai.yaml', 'r') as f:
+    config = 'configs_eval/ai.yaml'  #ACA VA LA CONFIG DE EVALUACION DE AI ECONOMIST
+    agents = 'checkpoints/policy_a_weights_w_planner.pt' #ACA VA EL CHECKPOINT DE LOS AGENTES DE AI ECONOMIST (WITH PLANNER)
+    planner = 'checkpoints/policy_p_weights_w_planner.pt' #ACA VA EL CHECKPOINT DEL PLANNER DE AI ECONOMIST (WITH PLANNER)
+
+    with open(config, 'r') as f:
         ai_config = yaml.safe_load(f)
     
     env_config = build_env_config(ai_config)
@@ -201,18 +228,18 @@ def compare_all_policies():
     trainer_config = build_trainer_config(env_obj, ai_config, env_config)
     ai_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
  
-    agent_weights = torch.load('checkpoints/policy_a_weights.pt', map_location='cpu')
+    agent_weights = torch.load(agents, map_location='cpu')
     ai_trainer.get_policy("a").model.load_state_dict(agent_weights)
     
-    planner_weights = torch.load('checkpoints/policy_p_weights_w_planner.pt', map_location='cpu')
+    planner_weights = torch.load(planner, map_location='cpu')
     ai_trainer.get_policy("p").model.load_state_dict(planner_weights)
     print(" Pesos cargados")
     
     results_ai_economist = evaluate_policy(
-        'configs_eval/ai.yaml',
+        config,
         'AI Economist',
         trainer=ai_trainer,
-        n_episodes=5
+        n_episodes=10
     )
     
     ai_trainer.stop()
@@ -221,7 +248,7 @@ def compare_all_policies():
     all_results = [
         results_free_market,
         results_us_federal,
-        results_saez,
+        # results_saez,
         results_ai_economist
     ]
     
