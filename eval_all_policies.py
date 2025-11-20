@@ -159,60 +159,60 @@ def compare_all_policies():
 
     free_trainer.stop()
     
-    # 2. US Federal
+    # # 2. US Federal
 
-    config = 'configs_eval/us_fed.yaml'  #ACA VA LA CONFIG DE EVALUACION DE US FEDERAL
+    # config = 'configs_eval/us_fed.yaml'  #ACA VA LA CONFIG DE EVALUACION DE US FEDERAL
 
-    print("\n Cargando pesos del US Federal...")
-    with open(config, 'r') as f:
-        us_fed_config = yaml.safe_load(f)
-    
-    env_config = build_env_config(us_fed_config)
-    env_obj = create_env_for_inspection(env_config)
-    trainer_config = build_trainer_config(env_obj, us_fed_config, env_config)
-    us_fed_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
-    
-    agent_weights = torch.load('checkpoints/us_fed/policy_a_weights.pt', map_location='cpu')
-    us_fed_trainer.get_policy("a").model.load_state_dict(agent_weights)
-    
-
-    print("Pesos cargados")
-    
-    results_us_federal = evaluate_policy(
-        config,
-        'US Federal',
-        trainer=us_fed_trainer,
-        n_episodes=10
-    )
-
-    us_fed_trainer.stop()
-    
-    # # 3. Saez Formula 
-
-    # config = 'configs_eval/saez.yaml'  #ACA VA LA CONFIG DE EVALUACION DE SAEZ FORMULA
-
-    # print("\n Cargando pesos de Saez Formula...")
+    # print("\n Cargando pesos del US Federal...")
     # with open(config, 'r') as f:
-    #     saez_config = yaml.safe_load(f)
+    #     us_fed_config = yaml.safe_load(f)
     
-    # env_config = build_env_config(saez_config)
+    # env_config = build_env_config(us_fed_config)
     # env_obj = create_env_for_inspection(env_config)
-    # trainer_config = build_trainer_config(env_obj, saez_config, env_config)
-    # saez_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
+    # trainer_config = build_trainer_config(env_obj, us_fed_config, env_config)
+    # us_fed_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
     
-    # agent_weights = torch.load('checkpoints/saez/policy_a_weights.pt', map_location='cpu')
-    # saez_trainer.get_policy("a").model.load_state_dict(agent_weights)
+    # agent_weights = torch.load('checkpoints/us_fed/policy_a_weights.pt', map_location='cpu')
+    # us_fed_trainer.get_policy("a").model.load_state_dict(agent_weights)
     
 
     # print("Pesos cargados")
     
-    # results_saez = evaluate_policy(
+    # results_us_federal = evaluate_policy(
     #     config,
-    #     'Saez Formula',
-    #     trainer=saez_trainer,
+    #     'US Federal',
+    #     trainer=us_fed_trainer,
     #     n_episodes=10
     # )
-    # saez_trainer.stop()
+
+    # us_fed_trainer.stop()
+    
+    # 3. Saez Formula 
+
+    config = 'configs_eval/saez.yaml'  #ACA VA LA CONFIG DE EVALUACION DE SAEZ FORMULA
+
+    print("\n Cargando pesos de Saez Formula...")
+    with open(config, 'r') as f:
+        saez_config = yaml.safe_load(f)
+    
+    env_config = build_env_config(saez_config)
+    env_obj = create_env_for_inspection(env_config)
+    trainer_config = build_trainer_config(env_obj, saez_config, env_config)
+    saez_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
+    
+    agent_weights = torch.load('checkpoints/saez/policy_a_weights.pt', map_location='cpu')
+    saez_trainer.get_policy("a").model.load_state_dict(agent_weights)
+    
+
+    print("Pesos cargados")
+    
+    results_saez = evaluate_policy(
+        config,
+        'Saez Formula',
+        trainer=saez_trainer,
+        n_episodes=10
+    )
+    saez_trainer.stop()
 
     # 4. AI Economist (cargar pesos entrenados)
     print("\n Cargando pesos del AI Economist...")
@@ -247,8 +247,8 @@ def compare_all_policies():
     
     all_results = [
         results_free_market,
-        results_us_federal,
-        # results_saez,
+        # results_us_federal,
+        results_saez,
         results_ai_economist
     ]
     
