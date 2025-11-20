@@ -211,7 +211,7 @@ def build_multiagent_policies(env_obj, run_configuration):
         return "a" if str(agent_id).isdigit() else "p"
 
     # En Fase 2 queremos entrenar SOLO el planner, si train_planner=True
-    policies_to_train = ["p"] if train_planner else ["a"]
+    policies_to_train = ["p", "a"] if train_planner else ["a"]
 
     logger.info(f"Políticas configuradas - Train planner: {train_planner}")
     logger.info(f"  - LR agentes (a): {policies['a'][3]['lr']}")
@@ -496,9 +496,10 @@ def main(planner=True):
 
             # Congelar pesos de agentes si estamos entrenando planner
             if train_planner_flag:
-                for param in trainer.get_policy("a").model.parameters():
-                    param.requires_grad = False
-                logger.info("Pesos de agentes CONGELADOS (no se entrenarán en Fase 2).")
+                logger.info("Pesos de agentes utilizados para entrenar en Fase 2.")
+                #for param in trainer.get_policy("a").model.parameters():
+                    #param.requires_grad = False
+                #logger.info("Pesos de agentes CONGELADOS (no se entrenarán en Fase 2).")
         except Exception as e:
             logger.error(f"Error al cargar pesos de agentes: {e}")
             logger.warning("Continuando con pesos aleatorios para agentes.")
