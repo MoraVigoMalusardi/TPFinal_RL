@@ -500,6 +500,12 @@ def main():
     logger.info("Creando PPOTrainer...")
     trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
 
+    policy_a = trainer.get_policy("a")
+    print("\n=== Arquitectura completa de la policy 'a' ===")
+    print(policy_a.model)
+    print("=============================================\n")
+
+
     num_iterations = run_configuration.get("general", {}).get("num_iterations", 100)
     logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
 
