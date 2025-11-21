@@ -186,6 +186,9 @@ def build_multiagent_policies(env_obj, run_configuration):
         "vf_share_layers": False,
     }
 
+    logger.info("Agent uses lstm: " + str(agent_model["use_lstm"]))
+    logger.info("Planner uses lstm: " + str(planner_model["use_lstm"]))
+
     policies = {
         "a": (
             None,

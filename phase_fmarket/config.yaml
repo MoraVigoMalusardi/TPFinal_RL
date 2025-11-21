@@ -76,6 +76,9 @@ agent_policy:
       lstm_cell_size: 128
       num_conv: 2
       num_fc: 2
+    # agrego para correr con lstm
+    use_lstm: true
+    lstm_cell_size: 128   # o lo que quieras
     max_seq_len: 25
   use_gae: true
   vf_clip_param: 50.0
