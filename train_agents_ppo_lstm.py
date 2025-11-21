@@ -495,76 +495,20 @@ def save_history_to_csv(history, filepath):
 # 8) main()
 # -------------------------------------------------------------------
 
-# def main():
-#     """
-#     Pipeline de Fase 1 (entrenamiento de agentes):
-#     1. Carga configuración desde YAML.
-#     2. Crea el entorno.
-#     3. Construye el PPOTrainer multi-agente.
-#     4. Entrena por N iteraciones.
-#     5. Guarda pesos de agentes y CSV de métricas.
-#     6. Ejecuta un episodio de evaluación.
-#     """
-#     run_configuration, run_dir = process_args()
-
-#     logger.info("=" * 70)
-#     logger.info("Iniciando entrenamiento FASE 1 (AGENTES) con AI-Economist")
-#     logger.info(f"Run directory: {run_dir}")
-#     logger.info("=" * 70)
-
-#     env_config = build_env_config(run_configuration)
-#     env_obj = create_env_for_inspection(env_config)
-
-#     trainer_config = build_trainer_config(env_obj, run_configuration, env_config)
-
-#     logger.info("Inicializando Ray...")
-#     ray.init(include_dashboard=False, log_to_driver=False)
-
-#     logger.info("Creando PPOTrainer...")
-#     trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
-
-#     policy_a = trainer.get_policy("a")
-#     print("\n=== Arquitectura completa de la policy 'a' ===")
-#     print(policy_a.model)
-#     print("=============================================\n")
-
-
-#     num_iterations = run_configuration.get("general", {}).get("num_iterations", 100)
-#     logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
-
-#     history = train(trainer, num_iters=num_iterations)
-
-#     csv_path = os.path.join(run_dir, "ppo_results_agents.csv")
-#     save_history_to_csv(history, csv_path)
-
-#     logger.info("\nEjecutando episodio de evaluación...")
-#     episode_length = env_config.get("episode_length", 1000)
-#     run_eval_episode(trainer, env_obj, max_steps=episode_length)
-
-#     logger.info("Cerrando Ray...")
-#     ray.shutdown()
-
-#     logger.info("=" * 70)
-#     logger.info("Entrenamiento FASE 1 completado exitosamente!")
-#     logger.info("=" * 70)
-
-
-# if __name__ == "__main__":
-#     main()
-
 def main():
     """
-    Solo evaluación de agentes ya entrenados:
+    Pipeline de Fase 1 (entrenamiento de agentes):
     1. Carga configuración desde YAML.
     2. Crea el entorno.
     3. Construye el PPOTrainer multi-agente.
-    4. Carga pesos de agentes desde checkpoints.
-    5. Ejecuta un episodio de evaluación.
+    4. Entrena por N iteraciones.
+    5. Guarda pesos de agentes y CSV de métricas.
+    6. Ejecuta un episodio de evaluación.
     """
     run_configuration, run_dir = process_args()
 
     logger.info("=" * 70)
-    logger.info("Evaluación FASE 1 (AGENTES) con AI-Economist")
+    logger.info("Iniciando entrenamiento FASE 1 (AGENTES) con AI-Economist")
     logger.info(f"Run directory: {run_dir}")
     logger.info("=" * 70)
 
@@ -579,21 +523,19 @@ def main():
     logger.info("Creando PPOTrainer...")
     trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
 
-    # (Opcional) imprimir arquitectura
     policy_a = trainer.get_policy("a")
     print("\n=== Arquitectura completa de la policy 'a' ===")
     print(policy_a.model)
     print("=============================================\n")
 
-    # ---- CARGAR PESOS YA ENTRENADOS ----
-    import torch, os
-    weights_path = "checkpoints/policy_a_weights.pt"
-    if os.path.exists(weights_path):
-        state_dict = torch.load(weights_path, map_location="cpu")
-        trainer.get_policy("a").model.load_state_dict(state_dict)
-        print(f"Pesos de política 'a' cargados desde: {weights_path}")
-    else:
-        print(f"⚠ No encontré {weights_path}, se evalúa con pesos aleatorios.")
+
+    num_iterations = run_configuration.get("general", {}).get("num_iterations", 100)
+    logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
+
+    history = train(trainer, num_iters=num_iterations)
+
+    csv_path = os.path.join(run_dir, "ppo_results_agents.csv")
+    save_history_to_csv(history, csv_path)
 
     logger.info("\nEjecutando episodio de evaluación...")
     episode_length = env_config.get("episode_length", 1000)
@@ -603,6 +545,9 @@ def main():
     ray.shutdown()
 
     logger.info("=" * 70)
-    logger.info("Evaluación FASE 1 completada!")
+    logger.info("Entrenamiento FASE 1 completado exitosamente!")
     logger.info("=" * 70)
 
+
+if __name__ == "__main__":
+    main()
