@@ -208,7 +208,7 @@ def main():
 
     trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
 
-    a_path = "policy_a_weights.pt"
+    a_path = "checkpoints/policy_a_weights.pt"
     if os.path.exists(a_path):
         trainer.get_policy("a").model.load_state_dict(torch.load(a_path, map_location="cpu"))
         print("Pesos de política 'a' cargados.")
