@@ -67,15 +67,17 @@ agent_policy:
   lr: 0.0003
   lr_schedule: null
   model:
-    custom_model: keras_conv_lstm
-    custom_options:
-      fc_dim: 128
-      idx_emb_dim: 4
-      input_emb_vocab: 100
-      lstm_cell_size: 128
-      num_conv: 2
-      num_fc: 2
-    max_seq_len: 25
+    # custom_model: keras_conv_lstm
+    # custom_options:
+    #   fc_dim: 128
+    #   idx_emb_dim: 4
+    #   input_emb_vocab: 100
+    #   lstm_cell_size: 128
+    #   num_conv: 2
+    #   num_fc: 2
+    use_lstm: true          # <- activar LSTM
+    lstm_cell_size: 128     # <- mismo tamaño que en Free Market
+    max_seq_len: 25         # <- igual que en Free Market
   use_gae: true
   vf_clip_param: 50.0
   vf_loss_coeff: 0.05
