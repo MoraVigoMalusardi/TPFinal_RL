@@ -389,18 +389,18 @@ def train(trainer, num_iters=5):
     # Guardar pesos de la policy 'a' al final de Fase 1
     import torch  # import local para no contaminar namespace global si no se usa
 
-    os.makedirs("checkpoints/saez_lstm", exist_ok=True)
+    os.makedirs("checkpoints/us_fed_lstm", exist_ok=True)
     # guardar pesos de la política 'a'
     torch.save(
         trainer.get_policy("a").model.state_dict(),
-        "checkpoints/saez_lstm/policy_a_weights.pt"
+        "checkpoints/us_fed_lstm/policy_a_weights.pt"
     )
 
     # si tenés planner 'p', guardalo también
     if "p" in trainer.workers.local_worker().policy_map:
         torch.save(
             trainer.get_policy("p").model.state_dict(),
-            "checkpoints/saez_lstm/policy_p_weights.pt"
+            "checkpoints/us_fed_lstm/policy_p_weights.pt"
     )
 
     return history
@@ -480,7 +480,7 @@ def save_history_to_csv(history, filepath):
     filepath : str
         Ruta de salida para el CSV.
     """
-    csv_path = "ppo_results_saez_lstm.csv"
+    csv_path = "ppo_results_us_fed_lstm.csv"
     fieldnames = list(history[0].keys())
 
     with open(csv_path, "w", newline="") as f:
@@ -528,7 +528,7 @@ def main():
 
     history = train(trainer, num_iters=num_iterations)
 
-    save_history_to_csv(history, os.path.join(run_dir, "ppo_results_saez_lstm.csv"))
+    save_history_to_csv(history, os.path.join(run_dir, "ppo_results_us_fed_lstm.csv"))
 
     logger.info("\nEjecutando episodio de evaluación...")
     episode_length = env_config.get("episode_length", 1000)
