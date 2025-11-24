@@ -391,6 +391,7 @@ def train(trainer, num_iters=5):
     import torch  # import local para no contaminar namespace global si no se usa
 
     os.makedirs("checkpoints", exist_ok=True)
+    os.makedirs("checkpoints/nuevo_sin_lstm", exist_ok=True)    
     torch.save(
         trainer.get_policy("a").model.state_dict(),
         "checkpoints/nuevo_sin_lstm/policy_a_weights.pt",
@@ -532,7 +533,9 @@ def main():
 
     history = train(trainer, num_iters=num_iterations)
 
-    csv_path = os.path.join(run_dir, "nuevo_sin_lstm/ppo_results_agents.csv")
+    # crear carpeta para guardar csv
+    os.makedirs("nuevo_sin_lstm", exist_ok=True)
+    csv_path = "nuevo_sin_lstm/ppo_results_agents.csv"
     save_history_to_csv(history, csv_path)
 
     logger.info("\nEjecutando episodio de evaluación...")
