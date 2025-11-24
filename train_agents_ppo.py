@@ -6,6 +6,7 @@ import yaml
 import argparse
 import logging
 import warnings
+from ray.tune.logger import UnifiedLogger
 
 from ray.rllib.agents.ppo import PPOTrainer
 from tutorials.rllib.env_wrapper import RLlibEnvWrapper
@@ -167,23 +168,19 @@ def build_multiagent_policies(env_obj, run_configuration):
     # Modelo para agentes
     agent_model_cfg = agent_policy_config.get("model", {})
     agent_model = {
-        "fcnet_hiddens": [256, 256],  # Usamos 2 capas fully-connected de 256 unidades con tanh
-        "fcnet_activation": "tanh",
+        "fcnet_hiddens": agent_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_activation": agent_model_cfg.get("fcnet_activation", "tanh"),
         "use_lstm": agent_model_cfg.get("use_lstm", False), 
-        "lstm_cell_size": agent_model_cfg.get("lstm_cell_size", 128),
-        "max_seq_len": agent_model_cfg.get("max_seq_len", 25),
-        "vf_share_layers": False,
+        "vf_share_layers": agent_model_cfg.get("vf_share_layers", False),
     }
 
     # Modelo para planner (en fase 1 típicamente no se usa/entrena)
     planner_model_cfg = planner_policy_config.get("model", {})
     planner_model = {
-        "fcnet_hiddens": [256, 256],
-        "fcnet_activation": "tanh",
-        "use_lstm": planner_model_cfg.get("use_lstm", False),
-        "lstm_cell_size": planner_model_cfg.get("lstm_cell_size", 128),
-        "max_seq_len": planner_model_cfg.get("max_seq_len", 25),
-        "vf_share_layers": False,
+        "fcnet_hiddens": planner_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_activation": planner_model_cfg.get("fcnet_activation", "tanh"),
+        "use_lstm": planner_model_cfg.get("use_lstm", False), 
+        "vf_share_layers": planner_model_cfg.get("vf_share_layers", False),
     }
 
     logger.info("Agent uses lstm: " + str(agent_model["use_lstm"]))
@@ -197,12 +194,14 @@ def build_multiagent_policies(env_obj, run_configuration):
             {
                 "model": agent_model,
                 "gamma": agent_policy_config.get("gamma", 0.998),
-                "lr": agent_policy_config.get("lr", 3e-4),
+                "lr": agent_policy_config.get("lr", 0.0003),
                 "vf_loss_coeff": agent_policy_config.get("vf_loss_coeff", 0.05),
                 "entropy_coeff": agent_policy_config.get("entropy_coeff", 0.025),
                 "clip_param": agent_policy_config.get("clip_param", 0.3),
-                "vf_clip_param": agent_policy_config.get("vf_clip_param", 10.0),
+                "vf_clip_param": agent_policy_config.get("vf_clip_param", 50.0),
                 "grad_clip": agent_policy_config.get("grad_clip", 10.0),
+                "lambda": agent_policy_config.get("lambda", 0.98),
+                "use_gae": agent_policy_config.get("use_gae", True),
             },
         ),
         "p": (
@@ -212,13 +211,14 @@ def build_multiagent_policies(env_obj, run_configuration):
             {
                 "model": planner_model,
                 "gamma": planner_policy_config.get("gamma", 0.998),
-                # En fase 1 normalmente no se entrena el planner
-                "lr": planner_policy_config.get("lr", 0.0 if not train_planner else 3e-4),
+                "lr": planner_policy_config.get("lr", 0.0 if not train_planner else 0.0001),
                 "vf_loss_coeff": planner_policy_config.get("vf_loss_coeff", 0.05),
-                "entropy_coeff": planner_policy_config.get("entropy_coeff", 0.025),
+                "entropy_coeff": planner_policy_config.get("entropy_coeff", 0.1),
                 "clip_param": planner_policy_config.get("clip_param", 0.3),
-                "vf_clip_param": planner_policy_config.get("vf_clip_param", 10.0),
+                "vf_clip_param": planner_policy_config.get("vf_clip_param", 50.0),
                 "grad_clip": planner_policy_config.get("grad_clip", 10.0),
+                "lambda": planner_policy_config.get("lambda", 0.98),
+                "use_gae": planner_policy_config.get("use_gae", True),
             },
         ),
     }
@@ -275,18 +275,17 @@ def build_trainer_config(env_obj, run_configuration, env_config):
             "policies_to_train": policies_to_train,
             "policy_mapping_fn": policy_mapping_fn,
         },
-        "num_workers": trainer_yaml_config.get("num_workers", 2),
+        "num_workers": trainer_yaml_config.get("num_workers", 12),
         "num_envs_per_worker": trainer_yaml_config.get("num_envs_per_worker", 2),
         "framework": "torch",
         "num_gpus": trainer_yaml_config.get("num_gpus", 0),
         "log_level": "ERROR",
-        "train_batch_size": trainer_yaml_config.get("train_batch_size", 2000),
+        "train_batch_size": trainer_yaml_config.get("train_batch_size", 4800),
         "sgd_minibatch_size": trainer_yaml_config.get("sgd_minibatch_size", 512),
         "num_sgd_iter": trainer_yaml_config.get("num_sgd_iter", 10),
         "rollout_fragment_length": trainer_yaml_config.get("rollout_fragment_length", 200),
-        # Usar episodios completos para que los rewards tengan sentido
-        "batch_mode": "complete_episodes",
-        "no_done_at_end": False,
+        "batch_mode": trainer_yaml_config.get("batch_mode", "truncate_episodes"),
+        "no_done_at_end": trainer_yaml_config.get("no_done_at_end", False),
     }
 
     # Config específico del wrapper de AI-Economist
@@ -302,6 +301,18 @@ def build_trainer_config(env_obj, run_configuration, env_config):
     logger.info(f"  - SGD minibatch size: {trainer_config['sgd_minibatch_size']}")
 
     return trainer_config
+
+def create_tb_logger_creator(run_dir):
+    """
+    Crea un logger_creator para que RLlib escriba logs de TensorBoard
+    dentro de run_dir/tb_logs.
+    """
+    def logger_creator(config):
+        logdir = os.path.join(run_dir, "tb_logs")
+        os.makedirs(logdir, exist_ok=True)
+        return UnifiedLogger(config, logdir, loggers=None)
+
+    return logger_creator
 
 
 # -------------------------------------------------------------------
@@ -382,14 +393,14 @@ def train(trainer, num_iters=5):
     os.makedirs("checkpoints", exist_ok=True)
     torch.save(
         trainer.get_policy("a").model.state_dict(),
-        "checkpoints/policy_a_weights.pt",
+        "checkpoints/nuevo_sin_lstm/policy_a_weights.pt",
     )
 
     # Guardar también planner (aunque en Fase 1 típicamente no se entrena)
     if "p" in trainer.workers.local_worker().policy_map:
         torch.save(
             trainer.get_policy("p").model.state_dict(),
-            "checkpoints/policy_p_weights.pt",
+            "checkpoints/nuevo_sin_lstm/policy_p_weights.pt",
         )
 
     return history
@@ -497,8 +508,18 @@ def main():
     logger.info("Inicializando Ray...")
     ray.init(include_dashboard=False, log_to_driver=False)
 
-    logger.info("Creando PPOTrainer...")
-    trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
+    # Logger de TensorBoard
+    logger_creator = create_tb_logger_creator(run_dir)
+
+    logger.info("Creando PPOTrainer (con TensorBoard)...")
+    trainer = PPOTrainer(
+        env=RLlibEnvWrapper,
+        config=trainer_config,
+        logger_creator=logger_creator,
+    )
+
+    print(f"\nTensorBoard logs se están guardando en: {trainer.logdir}\n")
+
 
     policy_a = trainer.get_policy("a")
     print("\n=== Arquitectura completa de la policy 'a' ===")
@@ -511,7 +532,7 @@ def main():
 
     history = train(trainer, num_iters=num_iterations)
 
-    csv_path = os.path.join(run_dir, "ppo_results_agents.csv")
+    csv_path = os.path.join(run_dir, "nuevo_sin_lstm/ppo_results_agents.csv")
     save_history_to_csv(history, csv_path)
 
     logger.info("\nEjecutando episodio de evaluación...")
