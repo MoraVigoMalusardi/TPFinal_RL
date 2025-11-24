@@ -386,9 +386,20 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
     """
     Ejecuta un episodio de evaluación usando el entorno local.
 
-    Soporta tanto políticas recurrentes (LSTM) como no recurrentes.
-    Mantiene un estado RNN separado por (policy_id, agent_id).
+    - Soporta políticas recurrentes (LSTM) y no recurrentes.
+    - Aplana las observaciones con el mismo preprocesador que usa RLlib.
+    - Mantiene un estado RNN separado por (policy_id, agent_id).
     """
+    # Preprocesadores para las obs de agentes y planner
+    obs_space_a = env_obj.observation_space
+    obs_space_p = env_obj.observation_space_pl
+
+    PreprocA = get_preprocessor(obs_space_a)
+    PreprocP = get_preprocessor(obs_space_p)
+
+    preproc_a = PreprocA(obs_space_a)
+    preproc_p = PreprocP(obs_space_p)
+
     obs = env_obj.reset()
     done = {"__all__": False}
     total_rewards = {agent_id: 0.0 for agent_id in obs.keys()}
@@ -405,21 +416,25 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
             policy_id = "a" if str(agent_id).isdigit() else "p"
             policy = trainer.get_policy(policy_id)
 
+            # Elegir el preprocesador correcto
+            if policy_id == "a":
+                flat_ob = preproc_a.transform(ob)
+            else:
+                flat_ob = preproc_p.transform(ob)
+
             # Obtener el estado previo del LSTM (o inicial si no existe)
             state = rnn_states.get(policy_id, {}).get(agent_id)
             if state is None:
-                # Para modelos no recurrentes esto suele devolver []
-                state = policy.get_initial_state()
-                # Aseguramos que exista el dict interno
+                state = policy.get_initial_state()  # [] si no hay LSTM
                 if policy_id not in rnn_states:
                     rnn_states[policy_id] = {}
                 rnn_states[policy_id][agent_id] = state
 
             # compute_single_action devuelve (action, new_state, extra_info)
             action, new_state, _ = policy.compute_single_action(
-                ob,
+                flat_ob,
                 state=state,
-                explore=False,   # evaluación determinista
+                explore=False,  # evaluación determinista
             )
 
             # Guardamos nuevo estado
