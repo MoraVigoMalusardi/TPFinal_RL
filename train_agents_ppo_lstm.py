@@ -6,6 +6,7 @@ import yaml
 import argparse
 import logging
 import warnings
+from ray.tune.logger import UnifiedLogger
 
 from ray.rllib.agents.ppo import PPOTrainer
 from tutorials.rllib.env_wrapper import RLlibEnvWrapper
@@ -14,18 +15,14 @@ from tutorials.rllib.env_wrapper import RLlibEnvWrapper
 # Configuración global de entorno y logging
 # -------------------------------------------------------------------
 
-# Desactivar dashboard de Ray (evita errores de aiohttp.signals)
 os.environ["RAY_DISABLE_DASHBOARD"] = "1"
-# Silenciar logs de TF (por si estuviera instalado)
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-# Ignorar warnings de librerías (Gym, etc.)
 warnings.filterwarnings("ignore")
 
 logging.basicConfig(stream=sys.stdout, format="%(asctime)s %(message)s")
 logger = logging.getLogger("train_agents")
 logger.setLevel(logging.INFO)
 
-# Reducir verbosidad de Ray / RLlib / Gym
 logging.getLogger("ray").setLevel(logging.ERROR)
 logging.getLogger("ray.rllib").setLevel(logging.ERROR)
 logging.getLogger("ray.tune").setLevel(logging.ERROR)
@@ -44,9 +41,8 @@ def process_args():
     Returns
     -------
     run_configuration : dict
-        Diccionario con toda la configuración cargada desde config.yaml.
     run_dir : str
-        Directorio base donde se encuentra config.yaml.
+    restore_checkpoint : str or None
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -61,6 +57,12 @@ def process_args():
         default=None,
         help="Número de iteraciones de entrenamiento (override de config.yaml si se especifica).",
     )
+    parser.add_argument(
+        "--restore-checkpoint",
+        type=str,
+        default=None,
+        help="Ruta a un checkpoint completo de RLlib para reanudar entrenamiento.",
+    )
     args = parser.parse_args()
 
     config_path = os.path.join(args.run_dir, "config.yaml")
@@ -72,13 +74,13 @@ def process_args():
 
     logger.info(f"Configuración cargada desde: {config_path}")
 
-    # Permitir override desde CLI del número de iteraciones
     if args.num_iters is not None:
         run_configuration.setdefault("general", {})
         run_configuration["general"]["num_iterations"] = args.num_iters
         logger.info(f"Overriding general.num_iterations a {args.num_iters}")
 
-    return run_configuration, args.run_dir
+    # Devolvemos también el path del checkpoint (puede ser None)
+    return run_configuration, args.run_dir, args.restore_checkpoint
 
 
 # -------------------------------------------------------------------
@@ -100,8 +102,6 @@ def build_env_config(run_configuration):
         Diccionario con la configuración del entorno para el wrapper.
     """
     env_config = run_configuration.get("env", {}).copy()
-
-    # Valor por defecto del escenario si no se especifica
     env_config.setdefault("scenario_name", "layout_from_file/simple_wood_and_stone")
 
     logger.info(f"Configuración del entorno: scenario={env_config['scenario_name']}")
@@ -167,23 +167,23 @@ def build_multiagent_policies(env_obj, run_configuration):
     # Modelo para agentes
     agent_model_cfg = agent_policy_config.get("model", {})
     agent_model = {
-        "fcnet_hiddens": [256, 256],  # Usamos 2 capas fully-connected de 256 unidades con tanh
-        "fcnet_activation": "tanh",
-        "use_lstm": agent_model_cfg.get("use_lstm", False), 
+        "fcnet_hiddens": agent_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_activation": agent_model_cfg.get("fcnet_activation", "tanh"),
+        "use_lstm": agent_model_cfg.get("use_lstm", True), 
         "lstm_cell_size": agent_model_cfg.get("lstm_cell_size", 128),
-        "max_seq_len": agent_model_cfg.get("max_seq_len", 25),
-        "vf_share_layers": False,
+        "max_seq_len": agent_model_cfg.get("max_seq_len", 50),
+        "vf_share_layers": agent_model_cfg.get("vf_share_layers", False),
     }
 
     # Modelo para planner (en fase 1 típicamente no se usa/entrena)
     planner_model_cfg = planner_policy_config.get("model", {})
     planner_model = {
-        "fcnet_hiddens": [256, 256],
-        "fcnet_activation": "tanh",
-        "use_lstm": planner_model_cfg.get("use_lstm", False),
+        "fcnet_hiddens": planner_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_activation": planner_model_cfg.get("fcnet_activation", "tanh"),
+        "use_lstm": planner_model_cfg.get("use_lstm", True), 
         "lstm_cell_size": planner_model_cfg.get("lstm_cell_size", 128),
-        "max_seq_len": planner_model_cfg.get("max_seq_len", 25),
-        "vf_share_layers": False,
+        "max_seq_len": planner_model_cfg.get("max_seq_len", 50),
+        "vf_share_layers": planner_model_cfg.get("vf_share_layers", False),
     }
 
     logger.info("Agent uses lstm: " + str(agent_model["use_lstm"]))
@@ -197,12 +197,14 @@ def build_multiagent_policies(env_obj, run_configuration):
             {
                 "model": agent_model,
                 "gamma": agent_policy_config.get("gamma", 0.998),
-                "lr": agent_policy_config.get("lr", 3e-4),
+                "lr": agent_policy_config.get("lr", 0.0003),
                 "vf_loss_coeff": agent_policy_config.get("vf_loss_coeff", 0.05),
                 "entropy_coeff": agent_policy_config.get("entropy_coeff", 0.025),
                 "clip_param": agent_policy_config.get("clip_param", 0.3),
-                "vf_clip_param": agent_policy_config.get("vf_clip_param", 10.0),
+                "vf_clip_param": agent_policy_config.get("vf_clip_param", 50.0),
                 "grad_clip": agent_policy_config.get("grad_clip", 10.0),
+                "lambda": agent_policy_config.get("lambda", 0.98),
+                "use_gae": agent_policy_config.get("use_gae", True),
             },
         ),
         "p": (
@@ -212,13 +214,14 @@ def build_multiagent_policies(env_obj, run_configuration):
             {
                 "model": planner_model,
                 "gamma": planner_policy_config.get("gamma", 0.998),
-                # En fase 1 normalmente no se entrena el planner
-                "lr": planner_policy_config.get("lr", 0.0 if not train_planner else 3e-4),
+                "lr": planner_policy_config.get("lr", 0.0 if not train_planner else 0.0001),
                 "vf_loss_coeff": planner_policy_config.get("vf_loss_coeff", 0.05),
-                "entropy_coeff": planner_policy_config.get("entropy_coeff", 0.025),
+                "entropy_coeff": planner_policy_config.get("entropy_coeff", 0.1),
                 "clip_param": planner_policy_config.get("clip_param", 0.3),
-                "vf_clip_param": planner_policy_config.get("vf_clip_param", 10.0),
+                "vf_clip_param": planner_policy_config.get("vf_clip_param", 50.0),
                 "grad_clip": planner_policy_config.get("grad_clip", 10.0),
+                "lambda": planner_policy_config.get("lambda", 0.98),
+                "use_gae": planner_policy_config.get("use_gae", True),
             },
         ),
     }
@@ -275,18 +278,17 @@ def build_trainer_config(env_obj, run_configuration, env_config):
             "policies_to_train": policies_to_train,
             "policy_mapping_fn": policy_mapping_fn,
         },
-        "num_workers": trainer_yaml_config.get("num_workers", 2),
+        "num_workers": trainer_yaml_config.get("num_workers", 12),
         "num_envs_per_worker": trainer_yaml_config.get("num_envs_per_worker", 2),
         "framework": "torch",
         "num_gpus": trainer_yaml_config.get("num_gpus", 0),
         "log_level": "ERROR",
-        "train_batch_size": trainer_yaml_config.get("train_batch_size", 2000),
+        "train_batch_size": trainer_yaml_config.get("train_batch_size", 4800),
         "sgd_minibatch_size": trainer_yaml_config.get("sgd_minibatch_size", 512),
         "num_sgd_iter": trainer_yaml_config.get("num_sgd_iter", 10),
         "rollout_fragment_length": trainer_yaml_config.get("rollout_fragment_length", 200),
-        # Usar episodios completos para que los rewards tengan sentido
-        "batch_mode": "complete_episodes",
-        "no_done_at_end": False,
+        "batch_mode": trainer_yaml_config.get("batch_mode", "truncate_episodes"),
+        "no_done_at_end": trainer_yaml_config.get("no_done_at_end", False),
     }
 
     # Config específico del wrapper de AI-Economist
@@ -303,6 +305,18 @@ def build_trainer_config(env_obj, run_configuration, env_config):
 
     return trainer_config
 
+def create_tb_logger_creator(run_dir):
+    """
+    Crea un logger_creator para que RLlib escriba logs de TensorBoard
+    dentro de run_dir/tb_logs.
+    """
+    def logger_creator(config):
+        logdir = os.path.join(run_dir, "tb_logs_lstm")
+        os.makedirs(logdir, exist_ok=True)
+        return UnifiedLogger(config, logdir, loggers=None)
+
+    return logger_creator
+
 
 # -------------------------------------------------------------------
 # 5) Bucle de entrenamiento
@@ -310,19 +324,10 @@ def build_trainer_config(env_obj, run_configuration, env_config):
 
 def train(trainer, num_iters=5):
     """
-    Ejecuta el lazo de entrenamiento de PPO.
-
-    Parameters
-    ----------
-    trainer : PPOTrainer
-        Instancia ya configurada de PPOTrainer.
-    num_iters : int
-        Número de iteraciones de entrenamiento (calls a trainer.train()).
-
-    Returns
-    -------
-    history : list[dict]
-        Lista con métricas resumidas por iteración de entrenamiento.
+    Ejecuta el lazo de entrenamiento de PPO y guarda:
+    - CSV (se maneja afuera)
+    - Pesos de policies (state_dict)
+    - Checkpoint completo de RLlib para poder reanudar
     """
     history = []
 
@@ -330,7 +335,6 @@ def train(trainer, num_iters=5):
         print(f"\n********** Iteración: {it} **********")
         result = trainer.train()
 
-        # Métricas globales por episodio
         episode_reward_mean = result.get("episode_reward_mean")
         episode_reward_min = result.get("episode_reward_min")
         episode_reward_max = result.get("episode_reward_max")
@@ -340,7 +344,6 @@ def train(trainer, num_iters=5):
         timesteps_total = result.get("timesteps_total")
         training_iteration = result.get("training_iteration")
 
-        # Métricas por política (multi-agente)
         policy_reward_mean = result.get("policy_reward_mean", {})
         policy_reward_min = result.get("policy_reward_min", {})
         policy_reward_max = result.get("policy_reward_max", {})
@@ -376,23 +379,29 @@ def train(trainer, num_iters=5):
         if "policy_reward_mean" in result:
             print(f"  Policy rewards: {result['policy_reward_mean']}")
 
-    # Guardar pesos de la policy 'a' al final de Fase 1
-    import torch  # import local para no contaminar namespace global si no se usa
+    # ==== Guardar pesos de policies (state_dict) ====
+    import torch
 
     os.makedirs("checkpoints", exist_ok=True)
+    os.makedirs("checkpoints/nuevo_con_lstm", exist_ok=True)
     torch.save(
         trainer.get_policy("a").model.state_dict(),
-        "checkpoints/policy_a_weights.pt",
+        "checkpoints/nuevo_con_lstm/policy_a_weights.pt",
     )
 
-    # Guardar también planner (aunque en Fase 1 típicamente no se entrena)
     if "p" in trainer.workers.local_worker().policy_map:
         torch.save(
             trainer.get_policy("p").model.state_dict(),
-            "checkpoints/policy_p_weights.pt",
+            "checkpoints/nuevo_con_lstm/policy_p_weights.pt",
         )
 
-    return history
+    # ==== Guardar checkpoint completo de RLlib ====
+    checkpoint_root = os.path.join("checkpoints", "rllib_full")
+    os.makedirs(checkpoint_root, exist_ok=True)
+    checkpoint_path = trainer.save(checkpoint_root)
+    logger.info(f"Checkpoint RLlib completo guardado en: {checkpoint_path}")
+
+    return history, checkpoint_path
 
 
 # -------------------------------------------------------------------
@@ -402,48 +411,26 @@ def train(trainer, num_iters=5):
 def run_eval_episode(trainer, env_obj, max_steps=200):
     """
     Ejecuta un episodio de evaluación usando el entorno local (no Ray workers).
-    Soporta policies recurrentes (LSTM) para los agentes 'a'.
+
+    Parameters
+    ----------
+    trainer : PPOTrainer
+        Trainer ya entrenado, con políticas cargadas.
+    env_obj : RLlibEnvWrapper
+        Entorno local para ejecutar el rollout.
+    max_steps : int
+        Número máximo de pasos en el episodio.
     """
     obs = env_obj.reset()
     done = {"__all__": False}
     total_rewards = {agent_id: 0.0 for agent_id in obs.keys()}
 
-    # --- Inicializar estados LSTM para la policy 'a' si es recurrente ---
-    policy_a = trainer.get_policy("a")
-    a_is_recurrent = hasattr(policy_a, "is_recurrent") and policy_a.is_recurrent()
-
-    if a_is_recurrent:
-        # un estado inicial por agente numérico (0,1,2,3)
-        rnn_states_a = {
-            agent_id: policy_a.get_initial_state()
-            for agent_id in obs.keys()
-            if str(agent_id).isdigit()
-        }
-
     step = 0
     while not done["__all__"] and step < max_steps:
         actions = {}
-
         for agent_id, ob in obs.items():
-            # agentes (0,1,2,3,...) -> policy "a"
-            if str(agent_id).isdigit():
-                if a_is_recurrent:
-                    state_in = rnn_states_a[agent_id]
-                    # full_fetch=True para obtener también el nuevo estado
-                    action, state_out, _ = trainer.compute_action(
-                        ob,
-                        state=state_in,
-                        policy_id="a",
-                        full_fetch=True,
-                    )
-                    rnn_states_a[agent_id] = state_out
-                else:
-                    action = trainer.compute_action(ob, policy_id="a")
-
-            # planner "p" (no recurrente en tu config)
-            else:
-                action = trainer.compute_action(ob, policy_id="p")
-
+            policy_id = "a" if str(agent_id).isdigit() else "p"
+            action = trainer.compute_action(ob, policy_id=policy_id)
             actions[agent_id] = action
 
         obs, rew, done, _info = env_obj.step(actions)
@@ -458,7 +445,6 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
     print("  Recompensa total por agente:")
     for agent_id, r in total_rewards.items():
         print(f"    {agent_id}: {r}")
-
 
 
 # -------------------------------------------------------------------
@@ -497,19 +483,15 @@ def save_history_to_csv(history, filepath):
 
 def main():
     """
-    Pipeline de Fase 1 (entrenamiento de agentes):
-    1. Carga configuración desde YAML.
-    2. Crea el entorno.
-    3. Construye el PPOTrainer multi-agente.
-    4. Entrena por N iteraciones.
-    5. Guarda pesos de agentes y CSV de métricas.
-    6. Ejecuta un episodio de evaluación.
+    Si NO se pasa --restore-checkpoint -> arranca desde cero.
+    Si SÍ se pasa --restore-checkpoint -> restaura y sigue entrenando.
     """
-    run_configuration, run_dir = process_args()
+    run_configuration, run_dir, restore_checkpoint = process_args()
 
     logger.info("=" * 70)
     logger.info("Iniciando entrenamiento FASE 1 (AGENTES) con AI-Economist")
     logger.info(f"Run directory: {run_dir}")
+    logger.info(f"Checkpoint a restaurar: {restore_checkpoint}")
     logger.info("=" * 70)
 
     env_config = build_env_config(run_configuration)
@@ -520,21 +502,35 @@ def main():
     logger.info("Inicializando Ray...")
     ray.init(include_dashboard=False, log_to_driver=False)
 
-    logger.info("Creando PPOTrainer...")
-    trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
+    # Logger de TensorBoard
+    logger_creator = create_tb_logger_creator(run_dir)
 
-    policy_a = trainer.get_policy("a")
-    print("\n=== Arquitectura completa de la policy 'a' ===")
-    print(policy_a.model)
-    print("=============================================\n")
+    logger.info("Creando PPOTrainer (con TensorBoard)...")
+    trainer = PPOTrainer(
+        env=RLlibEnvWrapper,
+        config=trainer_config,
+        logger_creator=logger_creator,
+    )
 
+    print(f"\nTensorBoard logs se están guardando en: {trainer.logdir}\n")
+
+    # ==== RESTAURAR CHECKPOINT COMPLETO (OPCIONAL) ====
+    if restore_checkpoint is not None:
+        if os.path.exists(restore_checkpoint):
+            logger.info(f"Restaurando trainer desde checkpoint: {restore_checkpoint}")
+            trainer.restore(restore_checkpoint)
+        else:
+            logger.warning(f"No se encontró el checkpoint: {restore_checkpoint}. Se entrenará desde cero.")
 
     num_iterations = run_configuration.get("general", {}).get("num_iterations", 100)
     logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
 
-    history = train(trainer, num_iters=num_iterations)
+    history, last_checkpoint = train(trainer, num_iters=num_iterations)
+    logger.info(f"Último checkpoint RLlib: {last_checkpoint}")
 
-    csv_path = os.path.join(run_dir, "ppo_results_agents.csv")
+    # CSV
+    os.makedirs("nuevo_con_lstm", exist_ok=True)
+    csv_path = "nuevo_con_lstm/ppo_results_agents.csv"
     save_history_to_csv(history, csv_path)
 
     logger.info("\nEjecutando episodio de evaluación...")
