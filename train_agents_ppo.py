@@ -533,9 +533,9 @@ def main():
     # ===========================================
 
     policy_a = trainer.get_policy("a")
-    print("\n=== Arquitectura completa de la policy 'a' ===")
-    print(policy_a.model)
-    print("=============================================\n")
+    # print("\n=== Arquitectura completa de la policy 'a' ===")
+    # print(policy_a.model)
+    # print("=============================================\n")
 
 
     num_iterations = run_configuration.get("general", {}).get("num_iterations", 100)
