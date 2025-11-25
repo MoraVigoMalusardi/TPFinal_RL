@@ -43,9 +43,8 @@ def process_args():
     Returns
     -------
     run_configuration : dict
-        Diccionario con toda la configuración cargada desde config.yaml.
     run_dir : str
-        Directorio base donde se encuentra config.yaml.
+    restore_checkpoint : str or None
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -59,6 +58,12 @@ def process_args():
         type=int,
         default=None,
         help="Número de iteraciones de entrenamiento (override de config.yaml si se especifica).",
+    )
+    parser.add_argument(
+        "--restore-checkpoint",
+        type=str,
+        default=None,
+        help="Ruta a un checkpoint completo de RLlib para reanudar entrenamiento del planner.",
     )
     args = parser.parse_args()
 
@@ -76,8 +81,7 @@ def process_args():
         run_configuration["general"]["num_iterations"] = args.num_iters
         logger.info(f"Overriding general.num_iterations a {args.num_iters}")
 
-    return run_configuration, args.run_dir
-
+    return run_configuration, args.run_dir, args.restore_checkpoint
 
 # -------------------------------------------------------------------
 # 2) Configuración del entorno
@@ -298,19 +302,9 @@ def create_tb_logger_creator(run_dir):
 
 def train(trainer, num_iters=5, planner=True):
     """
-    Ejecuta el lazo de entrenamiento de PPO en Fase 2.
-
-    Parameters
-    ----------
-    trainer : PPOTrainer
-    num_iters : int
-    planner : bool
-        Si True, se asume que estamos entrenando el planner
-        y se guardan los pesos con sufijo '_w_planner'.
-
-    Returns
-    -------
-    history : list[dict]
+    Ejecuta el lazo de entrenamiento de PPO en Fase 2 y guarda:
+    - Pesos de policies (state_dict).
+    - Checkpoint completo de RLlib para reanudar entrenamiento luego.
     """
     history = []
 
@@ -364,13 +358,11 @@ def train(trainer, num_iters=5, planner=True):
         if "policy_reward_mean" in result:
             print(f"  Policy rewards: {result['policy_reward_mean']}")
 
-    # Guardar pesos al final
+    # ---- Guardar pesos al final (state_dicts) ----
     os.makedirs("checkpoints", exist_ok=True)
-    os.makedirs("checkpoints/nuevo_sin_lstm", exist_ok=True)    
-
+    os.makedirs("checkpoints/nuevo_sin_lstm", exist_ok=True)
 
     if planner:
-        # Pesos con planner entrenado
         torch.save(
             trainer.get_policy("a").model.state_dict(),
             "checkpoints/nuevo_sin_lstm/policy_a_weights_w_planner.pt",
@@ -381,7 +373,6 @@ def train(trainer, num_iters=5, planner=True):
                 "checkpoints/nuevo_sin_lstm/policy_p_weights_w_planner.pt",
             )
     else:
-        # Variante sin planner (si quisieras usar este archivo para algo híbrido)
         torch.save(
             trainer.get_policy("a").model.state_dict(),
             "checkpoints/policy_a_weights.pt",
@@ -392,7 +383,13 @@ def train(trainer, num_iters=5, planner=True):
                 "checkpoints/policy_p_weights.pt",
             )
 
-    return history
+    # ---- Guardar checkpoint completo de RLlib ----
+    checkpoint_root = os.path.join("checkpoints", "rllib_planner_full")
+    os.makedirs(checkpoint_root, exist_ok=True)
+    checkpoint_path = trainer.save(checkpoint_root)
+    logger.info(f"Checkpoint RLlib completo (planner) guardado en: {checkpoint_path}")
+
+    return history, checkpoint_path
 
 
 # -------------------------------------------------------------------
@@ -469,21 +466,23 @@ def save_history_to_csv(history, filepath):
 
 def main(planner=True):
     """
-    Pipeline de Fase 2 (entrenamiento del planner):
-    1. Carga configuración desde YAML.
-    2. Crea el entorno.
-    3. Construye el PPOTrainer multi-agente.
-    4. Carga pesos de agentes desde Fase 1 y los congela.
-    5. (Opcional) Carga pesos previos del planner.
-    6. Entrena por N iteraciones.
-    7. Guarda pesos y CSV de métricas.
-    8. Ejecuta un episodio de evaluación.
+    Fase 2 (entrenamiento del planner):
+
+    - Si NO se pasa --restore-checkpoint:
+        * Se cargan pesos de agentes desde Fase 1 (restore_tf_weights_agents).
+        * Opcionalmente pesos iniciales de planner (restore_tf_weights_planner).
+        * Se entrena desde cero en Fase 2.
+
+    - Si SÍ se pasa --restore-checkpoint:
+        * Se restaura trainer completo (agentes + planner + optimizer + contadores).
+        * NO se vuelven a cargar los pesos de Fase 1 encima.
     """
-    run_configuration, run_dir = process_args()
+    run_configuration, run_dir, restore_checkpoint = process_args()
 
     logger.info("=" * 70)
     logger.info("Iniciando entrenamiento FASE 2 (PLANNER) con AI-Economist")
     logger.info(f"Run directory: {run_dir}")
+    logger.info(f"Checkpoint a restaurar (planner): {restore_checkpoint}")
     logger.info("=" * 70)
 
     env_config = build_env_config(run_configuration)
@@ -495,55 +494,68 @@ def main(planner=True):
     logger_creator = create_tb_logger_creator(run_dir)
 
     logger.info("Creando PPOTrainer...")
-    trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config, logger_creator=logger_creator,)
+    trainer = PPOTrainer(
+        env=RLlibEnvWrapper,
+        config=trainer_config,
+        logger_creator=logger_creator,
+    )
     print(f"\nTensorBoard logs se están guardando en: {trainer.logdir}\n")
 
-    # ---- Carga de pesos de Fase 1 (agentes) y planner (opcional) ----
     general_cfg = run_configuration.get("general", {})
     train_planner_flag = general_cfg.get("train_planner", True)
 
-    restore_agents_path = general_cfg.get("restore_tf_weights_agents", "")
-    restore_planner_path = general_cfg.get("restore_tf_weights_planner", "")
+    # ----------------------------------------------------------------
+    #  A) Si hay checkpoint completo, reanudar desde ahí
+    # ----------------------------------------------------------------
+    if restore_checkpoint is not None and os.path.exists(restore_checkpoint):
+        logger.info(f"Restaurando trainer (planner) desde checkpoint: {restore_checkpoint}")
+        trainer.restore(restore_checkpoint)
 
-    # Cargar pesos de agentes entrenados en Fase 1
-    if restore_agents_path and os.path.exists(restore_agents_path):
-        logger.info(f"Cargando pesos pre-entrenados de agentes desde: {restore_agents_path}")
-        try:
-            state_dict = torch.load(restore_agents_path, map_location="cpu")
-            trainer.get_policy("a").model.load_state_dict(state_dict)
-            logger.info("Pesos de política 'a' (agentes) cargados exitosamente.")
-
-            # Congelar pesos de agentes si estamos entrenando planner
-            if train_planner_flag:
-                logger.info("Pesos de agentes utilizados para entrenar en Fase 2.")
-        except Exception as e:
-            logger.error(f"Error al cargar pesos de agentes: {e}")
-            logger.warning("Continuando con pesos aleatorios para agentes.")
     else:
-        if train_planner_flag:
-            logger.warning("Fase 2 activada (train_planner=True) pero no se encontraron pesos de agentes.")
-            logger.warning(f"  Path de agentes especificado: {restore_agents_path}")
+        # ----------------------------------------------------------------
+        #  B) Si NO hay checkpoint, arrancar Fase 2 "normal":
+        #     cargar pesos Fase 1 para agentes (y planner opcional).
+        # ----------------------------------------------------------------
+        restore_agents_path = general_cfg.get("restore_tf_weights_agents", "")
+        restore_planner_path = general_cfg.get("restore_tf_weights_planner", "")
 
-    # Cargar pesos previos del planner (opcional)
-    if restore_planner_path and os.path.exists(restore_planner_path):
-        logger.info(f"Cargando pesos pre-entrenados de planner desde: {restore_planner_path}")
-        try:
-            state_dict = torch.load(restore_planner_path, map_location="cpu")
-            trainer.get_policy("p").model.load_state_dict(state_dict)
-            logger.info("Pesos de política 'p' (planner) cargados exitosamente.")
-        except Exception as e:
-            logger.error(f"Error al cargar pesos de planner: {e}")
-            logger.warning("Continuando con pesos aleatorios para planner.")
+        # Cargar pesos de agentes entrenados en Fase 1
+        if restore_agents_path and os.path.exists(restore_agents_path):
+            logger.info(f"Cargando pesos pre-entrenados de agentes desde: {restore_agents_path}")
+            try:
+                state_dict = torch.load(restore_agents_path, map_location="cpu")
+                trainer.get_policy("a").model.load_state_dict(state_dict)
+                logger.info("Pesos de política 'a' (agentes) cargados exitosamente.")
+                if train_planner_flag:
+                    logger.info("Pesos de agentes utilizados para entrenar en Fase 2.")
+            except Exception as e:
+                logger.error(f"Error al cargar pesos de agentes: {e}")
+                logger.warning("Continuando con pesos aleatorios para agentes.")
+        else:
+            if train_planner_flag:
+                logger.warning("Fase 2 activada (train_planner=True) pero no se encontraron pesos de agentes.")
+                logger.warning(f"  Path de agentes especificado: {restore_agents_path}")
+
+        # Cargar pesos previos del planner (opcional, solo la primera vez)
+        if restore_planner_path and os.path.exists(restore_planner_path):
+            logger.info(f"Cargando pesos pre-entrenados de planner desde: {restore_planner_path}")
+            try:
+                state_dict = torch.load(restore_planner_path, map_location="cpu")
+                trainer.get_policy("p").model.load_state_dict(state_dict)
+                logger.info("Pesos de política 'p' (planner) cargados exitosamente.")
+            except Exception as e:
+                logger.error(f"Error al cargar pesos de planner: {e}")
+                logger.warning("Continuando con pesos aleatorios para planner.")
 
     # ---- Entrenamiento ----
     num_iterations = general_cfg.get("num_iterations", 100)
     logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
 
-    history = train(trainer, num_iters=num_iterations, planner=planner)
+    history, last_checkpoint = train(trainer, num_iters=num_iterations, planner=planner)
+    logger.info(f"Último checkpoint RLlib (planner): {last_checkpoint}")
 
     # Guardar historial
     os.makedirs("nuevo_sin_lstm", exist_ok=True)
-
     csv_path = "nuevo_sin_lstm/ppo_results_with_planner.csv"
     save_history_to_csv(history, csv_path)
 
