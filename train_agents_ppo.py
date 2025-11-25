@@ -15,18 +15,14 @@ from tutorials.rllib.env_wrapper import RLlibEnvWrapper
 # Configuración global de entorno y logging
 # -------------------------------------------------------------------
 
-# Desactivar dashboard de Ray (evita errores de aiohttp.signals)
 os.environ["RAY_DISABLE_DASHBOARD"] = "1"
-# Silenciar logs de TF (por si estuviera instalado)
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-# Ignorar warnings de librerías (Gym, etc.)
 warnings.filterwarnings("ignore")
 
 logging.basicConfig(stream=sys.stdout, format="%(asctime)s %(message)s")
 logger = logging.getLogger("train_agents")
 logger.setLevel(logging.INFO)
 
-# Reducir verbosidad de Ray / RLlib / Gym
 logging.getLogger("ray").setLevel(logging.ERROR)
 logging.getLogger("ray.rllib").setLevel(logging.ERROR)
 logging.getLogger("ray.tune").setLevel(logging.ERROR)
@@ -73,7 +69,6 @@ def process_args():
 
     logger.info(f"Configuración cargada desde: {config_path}")
 
-    # Permitir override desde CLI del número de iteraciones
     if args.num_iters is not None:
         run_configuration.setdefault("general", {})
         run_configuration["general"]["num_iterations"] = args.num_iters
@@ -101,8 +96,6 @@ def build_env_config(run_configuration):
         Diccionario con la configuración del entorno para el wrapper.
     """
     env_config = run_configuration.get("env", {}).copy()
-
-    # Valor por defecto del escenario si no se especifica
     env_config.setdefault("scenario_name", "layout_from_file/simple_wood_and_stone")
 
     logger.info(f"Configuración del entorno: scenario={env_config['scenario_name']}")
@@ -521,6 +514,23 @@ def main():
 
     print(f"\nTensorBoard logs se están guardando en: {trainer.logdir}\n")
 
+    # ==== CARGAR PESOS PREVIOS (SI EXISTEN) ====
+    import torch
+    prev_a_path = "checkpoints/nuevo_sin_lstm/policy_a_weights.pt"
+    prev_p_path = "checkpoints/nuevo_sin_lstm/policy_p_weights.pt"
+
+    if os.path.exists(prev_a_path):
+        state_dict_a = torch.load(prev_a_path, map_location="cpu")
+        trainer.get_policy("a").model.load_state_dict(state_dict_a)
+        logger.info(f"Pesos de policy 'a' cargados desde: {prev_a_path}")
+    else:
+        logger.warning(f"No se encontró {prev_a_path}, 'a' arranca desde cero.")
+
+    if "p" in trainer.workers.local_worker().policy_map and os.path.exists(prev_p_path):
+        state_dict_p = torch.load(prev_p_path, map_location="cpu")
+        trainer.get_policy("p").model.load_state_dict(state_dict_p)
+        logger.info(f"Pesos de policy 'p' cargados desde: {prev_p_path}")
+    # ===========================================
 
     policy_a = trainer.get_policy("a")
     print("\n=== Arquitectura completa de la policy 'a' ===")
