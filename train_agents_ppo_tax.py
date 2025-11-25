@@ -406,16 +406,18 @@ def train(trainer, num_iters=5):
     import torch
 
     os.makedirs("checkpoints/saez", exist_ok=True)
+    os.makedirs("checkpoints/saez/nuevo_sin_lstm", exist_ok=True)
+
     # guardar pesos de la política 'a'
     torch.save(
         trainer.get_policy("a").model.state_dict(),
-        "checkpoints/saez/policy_a_weights.pt"
+        "checkpoints/saez/nuevo_sin_lstm/policy_a_weights.pt"
     )
 
     if "p" in trainer.workers.local_worker().policy_map:
         torch.save(
             trainer.get_policy("p").model.state_dict(),
-            "checkpoints/saez/policy_p_weights.pt"
+            "checkpoints/saez/nuevo_sin_lstm/policy_p_weights.pt"
     )
 
     # ==== Guardar checkpoint completo de RLlib ====
