@@ -41,9 +41,8 @@ def process_args():
     Returns
     -------
     run_configuration : dict
-        Diccionario con toda la configuración cargada desde config.yaml.
     run_dir : str
-        Directorio base donde se encuentra config.yaml.
+    restore_checkpoint : str or None
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -57,6 +56,12 @@ def process_args():
         type=int,
         default=None,
         help="Número de iteraciones de entrenamiento (override de config.yaml si se especifica).",
+    )
+    parser.add_argument(
+        "--restore-checkpoint",
+        type=str,
+        default=None,
+        help="Ruta a un checkpoint completo de RLlib para reanudar entrenamiento.",
     )
     args = parser.parse_args()
 
@@ -74,7 +79,8 @@ def process_args():
         run_configuration["general"]["num_iterations"] = args.num_iters
         logger.info(f"Overriding general.num_iterations a {args.num_iters}")
 
-    return run_configuration, args.run_dir
+    # Devolvemos también el path del checkpoint (puede ser None)
+    return run_configuration, args.run_dir, args.restore_checkpoint
 
 
 # -------------------------------------------------------------------
@@ -314,19 +320,10 @@ def create_tb_logger_creator(run_dir):
 
 def train(trainer, num_iters=5):
     """
-    Ejecuta el lazo de entrenamiento de PPO.
-
-    Parameters
-    ----------
-    trainer : PPOTrainer
-        Instancia ya configurada de PPOTrainer.
-    num_iters : int
-        Número de iteraciones de entrenamiento (calls a trainer.train()).
-
-    Returns
-    -------
-    history : list[dict]
-        Lista con métricas resumidas por iteración de entrenamiento.
+    Ejecuta el lazo de entrenamiento de PPO y guarda:
+    - CSV (se maneja afuera)
+    - Pesos de policies (state_dict)
+    - Checkpoint completo de RLlib para poder reanudar
     """
     history = []
 
@@ -334,7 +331,6 @@ def train(trainer, num_iters=5):
         print(f"\n********** Iteración: {it} **********")
         result = trainer.train()
 
-        # Métricas globales por episodio
         episode_reward_mean = result.get("episode_reward_mean")
         episode_reward_min = result.get("episode_reward_min")
         episode_reward_max = result.get("episode_reward_max")
@@ -344,7 +340,6 @@ def train(trainer, num_iters=5):
         timesteps_total = result.get("timesteps_total")
         training_iteration = result.get("training_iteration")
 
-        # Métricas por política (multi-agente)
         policy_reward_mean = result.get("policy_reward_mean", {})
         policy_reward_min = result.get("policy_reward_min", {})
         policy_reward_max = result.get("policy_reward_max", {})
@@ -380,24 +375,29 @@ def train(trainer, num_iters=5):
         if "policy_reward_mean" in result:
             print(f"  Policy rewards: {result['policy_reward_mean']}")
 
-    # Guardar pesos de la policy 'a' al final de Fase 1
-    import torch  # import local para no contaminar namespace global si no se usa
+    # ==== Guardar pesos de policies (state_dict) ====
+    import torch
 
     os.makedirs("checkpoints", exist_ok=True)
-    os.makedirs("checkpoints/nuevo_sin_lstm", exist_ok=True)    
+    os.makedirs("checkpoints/nuevo_sin_lstm", exist_ok=True)
     torch.save(
         trainer.get_policy("a").model.state_dict(),
         "checkpoints/nuevo_sin_lstm/policy_a_weights.pt",
     )
 
-    # Guardar también planner (aunque en Fase 1 típicamente no se entrena)
     if "p" in trainer.workers.local_worker().policy_map:
         torch.save(
             trainer.get_policy("p").model.state_dict(),
             "checkpoints/nuevo_sin_lstm/policy_p_weights.pt",
         )
 
-    return history
+    # ==== Guardar checkpoint completo de RLlib ====
+    checkpoint_root = os.path.join("checkpoints", "rllib_full")
+    os.makedirs(checkpoint_root, exist_ok=True)
+    checkpoint_path = trainer.save(checkpoint_root)
+    logger.info(f"Checkpoint RLlib completo guardado en: {checkpoint_path}")
+
+    return history, checkpoint_path
 
 
 # -------------------------------------------------------------------
@@ -479,19 +479,15 @@ def save_history_to_csv(history, filepath):
 
 def main():
     """
-    Pipeline de Fase 1 (entrenamiento de agentes):
-    1. Carga configuración desde YAML.
-    2. Crea el entorno.
-    3. Construye el PPOTrainer multi-agente.
-    4. Entrena por N iteraciones.
-    5. Guarda pesos de agentes y CSV de métricas.
-    6. Ejecuta un episodio de evaluación.
+    Si NO se pasa --restore-checkpoint -> arranca desde cero.
+    Si SÍ se pasa --restore-checkpoint -> restaura y sigue entrenando.
     """
-    run_configuration, run_dir = process_args()
+    run_configuration, run_dir, restore_checkpoint = process_args()
 
     logger.info("=" * 70)
     logger.info("Iniciando entrenamiento FASE 1 (AGENTES) con AI-Economist")
     logger.info(f"Run directory: {run_dir}")
+    logger.info(f"Checkpoint a restaurar: {restore_checkpoint}")
     logger.info("=" * 70)
 
     env_config = build_env_config(run_configuration)
@@ -514,36 +510,21 @@ def main():
 
     print(f"\nTensorBoard logs se están guardando en: {trainer.logdir}\n")
 
-    # ==== CARGAR PESOS PREVIOS (SI EXISTEN) ====
-    import torch
-    prev_a_path = "checkpoints/nuevo_sin_lstm/policy_a_weights.pt"
-    prev_p_path = "checkpoints/nuevo_sin_lstm/policy_p_weights.pt"
-
-    if os.path.exists(prev_a_path):
-        state_dict_a = torch.load(prev_a_path, map_location="cpu")
-        trainer.get_policy("a").model.load_state_dict(state_dict_a)
-        logger.info(f"Pesos de policy 'a' cargados desde: {prev_a_path}")
-    else:
-        logger.warning(f"No se encontró {prev_a_path}, 'a' arranca desde cero.")
-
-    if "p" in trainer.workers.local_worker().policy_map and os.path.exists(prev_p_path):
-        state_dict_p = torch.load(prev_p_path, map_location="cpu")
-        trainer.get_policy("p").model.load_state_dict(state_dict_p)
-        logger.info(f"Pesos de policy 'p' cargados desde: {prev_p_path}")
-    # ===========================================
-
-    policy_a = trainer.get_policy("a")
-    # print("\n=== Arquitectura completa de la policy 'a' ===")
-    # print(policy_a.model)
-    # print("=============================================\n")
-
+    # ==== RESTAURAR CHECKPOINT COMPLETO (OPCIONAL) ====
+    if restore_checkpoint is not None:
+        if os.path.exists(restore_checkpoint):
+            logger.info(f"Restaurando trainer desde checkpoint: {restore_checkpoint}")
+            trainer.restore(restore_checkpoint)
+        else:
+            logger.warning(f"No se encontró el checkpoint: {restore_checkpoint}. Se entrenará desde cero.")
 
     num_iterations = run_configuration.get("general", {}).get("num_iterations", 100)
     logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
 
-    history = train(trainer, num_iters=num_iterations)
+    history, last_checkpoint = train(trainer, num_iters=num_iterations)
+    logger.info(f"Último checkpoint RLlib: {last_checkpoint}")
 
-    # crear carpeta para guardar csv
+    # CSV
     os.makedirs("nuevo_sin_lstm", exist_ok=True)
     csv_path = "nuevo_sin_lstm/ppo_results_agents.csv"
     save_history_to_csv(history, csv_path)
