@@ -322,10 +322,10 @@ def build_trainer_config(env_obj, run_configuration, env_config):
 def create_tb_logger_creator(run_dir):
     """
     Crea un logger_creator para que RLlib escriba logs de TensorBoard
-    dentro de run_dir/tb_logs_saez.
+    dentro de run_dir/tb_logs_us_fed.
     """
     def logger_creator(config):
-        logdir = os.path.join(run_dir, "tb_logs_saez")
+        logdir = os.path.join(run_dir, "tb_logs_us_fed")
         os.makedirs(logdir, exist_ok=True)
         return UnifiedLogger(config, logdir, loggers=None)
 
@@ -405,23 +405,23 @@ def train(trainer, num_iters=5):
     # ==== Guardar pesos de policies (state_dict) ====
     import torch
 
-    os.makedirs("checkpoints/saez", exist_ok=True)
-    os.makedirs("checkpoints/saez/nuevo_sin_lstm", exist_ok=True)
+    os.makedirs("checkpoints/us_fed", exist_ok=True)
+    os.makedirs("checkpoints/us_fed/nuevo_sin_lstm", exist_ok=True)
 
     # guardar pesos de la política 'a'
     torch.save(
         trainer.get_policy("a").model.state_dict(),
-        "checkpoints/saez/nuevo_sin_lstm/policy_a_weights.pt"
+        "checkpoints/us_fed/nuevo_sin_lstm/policy_a_weights.pt"
     )
 
     if "p" in trainer.workers.local_worker().policy_map:
         torch.save(
             trainer.get_policy("p").model.state_dict(),
-            "checkpoints/saez/nuevo_sin_lstm/policy_p_weights.pt"
+            "checkpoints/us_fed/nuevo_sin_lstm/policy_p_weights.pt"
     )
 
     # ==== Guardar checkpoint completo de RLlib ====
-    checkpoint_root = os.path.join("checkpoints", "rllib_full_saez")
+    checkpoint_root = os.path.join("checkpoints", "rllib_full_us_fed")
     os.makedirs(checkpoint_root, exist_ok=True)
     checkpoint_path = trainer.save(checkpoint_root)
     logger.info(f"Checkpoint RLlib completo guardado en: {checkpoint_path}")
@@ -491,7 +491,7 @@ def save_history_to_csv(history, filepath):
         logger.warning("Historial vacío, no se guardará CSV.")
         return
     
-    csv_path = "ppo_results_saez.csv"
+    csv_path = "ppo_results_us_fed.csv"
     fieldnames = list(history[0].keys())
 
     with open(csv_path, "w", newline="") as f:
@@ -558,7 +558,7 @@ def main():
     history, last_checkpoint = train(trainer, num_iters=num_iterations)
     logger.info(f"Último checkpoint RLlib: {last_checkpoint}")
 
-    save_history_to_csv(history, os.path.join(run_dir, "ppo_results_saez.csv"))
+    save_history_to_csv(history, os.path.join(run_dir, "ppo_results_us_fed.csv"))
 
     logger.info("\nEjecutando episodio de evaluación...")
     episode_length = env_config.get("episode_length", 1000)
