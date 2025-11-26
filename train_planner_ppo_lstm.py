@@ -7,6 +7,7 @@ import torch
 import argparse
 import logging
 import warnings
+from ray.tune.logger import UnifiedLogger
 
 from ray.rllib.agents.ppo import PPOTrainer
 from tutorials.rllib.env_wrapper import RLlibEnvWrapper
@@ -42,9 +43,8 @@ def process_args():
     Returns
     -------
     run_configuration : dict
-        Diccionario con toda la configuración cargada desde config.yaml.
     run_dir : str
-        Directorio base donde se encuentra config.yaml.
+    restore_checkpoint : str or None
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -58,6 +58,12 @@ def process_args():
         type=int,
         default=None,
         help="Número de iteraciones de entrenamiento (override de config.yaml si se especifica).",
+    )
+    parser.add_argument(
+        "--restore-checkpoint",
+        type=str,
+        default=None,
+        help="Ruta a un checkpoint completo de RLlib para reanudar entrenamiento del planner.",
     )
     args = parser.parse_args()
 
@@ -75,8 +81,7 @@ def process_args():
         run_configuration["general"]["num_iterations"] = args.num_iters
         logger.info(f"Overriding general.num_iterations a {args.num_iters}")
 
-    return run_configuration, args.run_dir
-
+    return run_configuration, args.run_dir, args.restore_checkpoint
 
 # -------------------------------------------------------------------
 # 2) Configuración del entorno
@@ -149,24 +154,27 @@ def build_multiagent_policies(env_obj, run_configuration):
     # Modelo para agentes
     agent_model_cfg = agent_policy_config.get("model", {})
     agent_model = {
-        "fcnet_hiddens": [256, 256],
-        "fcnet_activation": "tanh",
-        "use_lstm": agent_model_cfg.get("use_lstm", False),
+        "fcnet_hiddens": agent_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_activation": agent_model_cfg.get("fcnet_activation", "tanh"),
+        "use_lstm": agent_model_cfg.get("use_lstm", True), 
         "lstm_cell_size": agent_model_cfg.get("lstm_cell_size", 128),
-        "max_seq_len": agent_model_cfg.get("max_seq_len", 25),
-        "vf_share_layers": False,
+        "max_seq_len": agent_model_cfg.get("max_seq_len", 50),
+        "vf_share_layers": agent_model_cfg.get("vf_share_layers", False),
     }
 
     # Modelo para planner
     planner_model_cfg = planner_policy_config.get("model", {})
     planner_model = {
-        "fcnet_hiddens": [256, 256],
-        "fcnet_activation": "tanh",
-        "use_lstm": planner_model_cfg.get("use_lstm", False),
+        "fcnet_hiddens": planner_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_activation": planner_model_cfg.get("fcnet_activation", "tanh"),
+        "use_lstm": planner_model_cfg.get("use_lstm", True), 
         "lstm_cell_size": planner_model_cfg.get("lstm_cell_size", 128),
-        "max_seq_len": planner_model_cfg.get("max_seq_len", 25),
-        "vf_share_layers": False,
+        "max_seq_len": planner_model_cfg.get("max_seq_len", 50),
+        "vf_share_layers": planner_model_cfg.get("vf_share_layers", False),
     }
+
+    logger.info("Agent uses lstm: " + str(agent_model["use_lstm"]))
+    logger.info("Planner uses lstm: " + str(planner_model["use_lstm"]))
 
     policies = {
         "a": (
@@ -176,13 +184,14 @@ def build_multiagent_policies(env_obj, run_configuration):
             {
                 "model": agent_model,
                 "gamma": agent_policy_config.get("gamma", 0.998),
-                # LR de agentes irrelevante si no se entrenan
-                "lr": agent_policy_config.get("lr", 3e-4),
+                "lr": agent_policy_config.get("lr", 0.0003),
                 "vf_loss_coeff": agent_policy_config.get("vf_loss_coeff", 0.05),
                 "entropy_coeff": agent_policy_config.get("entropy_coeff", 0.025),
                 "clip_param": agent_policy_config.get("clip_param", 0.3),
-                "vf_clip_param": agent_policy_config.get("vf_clip_param", 10.0),
+                "vf_clip_param": agent_policy_config.get("vf_clip_param", 50.0),
                 "grad_clip": agent_policy_config.get("grad_clip", 10.0),
+                "lambda": agent_policy_config.get("lambda", 0.98),
+                "use_gae": agent_policy_config.get("use_gae", True),
             },
         ),
         "p": (
@@ -192,12 +201,14 @@ def build_multiagent_policies(env_obj, run_configuration):
             {
                 "model": planner_model,
                 "gamma": planner_policy_config.get("gamma", 0.998),
-                "lr": planner_policy_config.get("lr", 3e-4 if train_planner else 0.0),
+                "lr": planner_policy_config.get("lr", 0.0 if not train_planner else 0.0001),
                 "vf_loss_coeff": planner_policy_config.get("vf_loss_coeff", 0.05),
-                "entropy_coeff": planner_policy_config.get("entropy_coeff", 0.025),
+                "entropy_coeff": planner_policy_config.get("entropy_coeff", 0.1),
                 "clip_param": planner_policy_config.get("clip_param", 0.3),
-                "vf_clip_param": planner_policy_config.get("vf_clip_param", 10.0),
+                "vf_clip_param": planner_policy_config.get("vf_clip_param", 50.0),
                 "grad_clip": planner_policy_config.get("grad_clip", 10.0),
+                "lambda": planner_policy_config.get("lambda", 0.98),
+                "use_gae": planner_policy_config.get("use_gae", True),
             },
         ),
     }
@@ -250,17 +261,17 @@ def build_trainer_config(env_obj, run_configuration, env_config):
             "policies_to_train": policies_to_train,
             "policy_mapping_fn": policy_mapping_fn,
         },
-        "num_workers": trainer_yaml_config.get("num_workers", 2),
+        "num_workers": trainer_yaml_config.get("num_workers", 12),
         "num_envs_per_worker": trainer_yaml_config.get("num_envs_per_worker", 2),
         "framework": "torch",
         "num_gpus": trainer_yaml_config.get("num_gpus", 0),
         "log_level": "ERROR",
-        "train_batch_size": trainer_yaml_config.get("train_batch_size", 2000),
+        "train_batch_size": trainer_yaml_config.get("train_batch_size", 4800),
         "sgd_minibatch_size": trainer_yaml_config.get("sgd_minibatch_size", 512),
         "num_sgd_iter": trainer_yaml_config.get("num_sgd_iter", 10),
         "rollout_fragment_length": trainer_yaml_config.get("rollout_fragment_length", 200),
-        "batch_mode": "complete_episodes",
-        "no_done_at_end": False,
+        "batch_mode": trainer_yaml_config.get("batch_mode", "truncate_episodes"),
+        "no_done_at_end": trainer_yaml_config.get("no_done_at_end", False),
     }
 
     env_wrapper_config = {
@@ -276,6 +287,18 @@ def build_trainer_config(env_obj, run_configuration, env_config):
 
     return trainer_config
 
+def create_tb_logger_creator(run_dir):
+    """
+    Crea un logger_creator para que RLlib escriba logs de TensorBoard
+    dentro de run_dir/tb_logs_planner_lstm.
+    """
+    def logger_creator(config):
+        logdir = os.path.join(run_dir, "tb_logs_planner_lstm")
+        os.makedirs(logdir, exist_ok=True)
+        return UnifiedLogger(config, logdir, loggers=None)
+
+    return logger_creator
+
 
 # -------------------------------------------------------------------
 # 5) Bucle de entrenamiento
@@ -283,19 +306,9 @@ def build_trainer_config(env_obj, run_configuration, env_config):
 
 def train(trainer, num_iters=5, planner=True):
     """
-    Ejecuta el lazo de entrenamiento de PPO en Fase 2.
-
-    Parameters
-    ----------
-    trainer : PPOTrainer
-    num_iters : int
-    planner : bool
-        Si True, se asume que estamos entrenando el planner
-        y se guardan los pesos con sufijo '_w_planner'.
-
-    Returns
-    -------
-    history : list[dict]
+    Ejecuta el lazo de entrenamiento de PPO en Fase 2 y guarda:
+    - Pesos de policies (state_dict).
+    - Checkpoint completo de RLlib para reanudar entrenamiento luego.
     """
     history = []
 
@@ -349,22 +362,21 @@ def train(trainer, num_iters=5, planner=True):
         if "policy_reward_mean" in result:
             print(f"  Policy rewards: {result['policy_reward_mean']}")
 
-    # Guardar pesos al final
+    # ---- Guardar pesos al final (state_dicts) ----
     os.makedirs("checkpoints", exist_ok=True)
+    os.makedirs("checkpoints/nuevo_con_lstm", exist_ok=True)
 
     if planner:
-        # Pesos con planner entrenado
         torch.save(
             trainer.get_policy("a").model.state_dict(),
-            "checkpoints/policy_a_weights_w_planner.pt",
+            "checkpoints/nuevo_con_lstm/policy_a_weights_w_planner.pt",
         )
         if "p" in trainer.workers.local_worker().policy_map:
             torch.save(
                 trainer.get_policy("p").model.state_dict(),
-                "checkpoints/policy_p_weights_w_planner.pt",
+                "checkpoints/nuevo_con_lstm/policy_p_weights_w_planner.pt",
             )
     else:
-        # Variante sin planner (si quisieras usar este archivo para algo híbrido)
         torch.save(
             trainer.get_policy("a").model.state_dict(),
             "checkpoints/policy_a_weights.pt",
@@ -375,7 +387,13 @@ def train(trainer, num_iters=5, planner=True):
                 "checkpoints/policy_p_weights.pt",
             )
 
-    return history
+    # ---- Guardar checkpoint completo de RLlib ----
+    checkpoint_root = os.path.join("checkpoints", "rllib_planner_full_lstm")
+    os.makedirs(checkpoint_root, exist_ok=True)
+    checkpoint_path = trainer.save(checkpoint_root)
+    logger.info(f"Checkpoint RLlib completo (planner) guardado en: {checkpoint_path}")
+
+    return history, checkpoint_path
 
 
 # -------------------------------------------------------------------
@@ -386,59 +404,22 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
     """
     Ejecuta un episodio de evaluación usando el entorno local.
 
-    - Soporta políticas recurrentes (LSTM) y no recurrentes.
-    - Aplana las observaciones con el mismo preprocesador que usa RLlib.
-    - Mantiene un estado RNN separado por (policy_id, agent_id).
+    Parameters
+    ----------
+    trainer : PPOTrainer
+    env_obj : RLlibEnvWrapper
+    max_steps : int
     """
-    # Preprocesadores para las obs de agentes y planner
-    obs_space_a = env_obj.observation_space
-    obs_space_p = env_obj.observation_space_pl
-
-    PreprocA = get_preprocessor(obs_space_a)
-    PreprocP = get_preprocessor(obs_space_p)
-
-    preproc_a = PreprocA(obs_space_a)
-    preproc_p = PreprocP(obs_space_p)
-
     obs = env_obj.reset()
     done = {"__all__": False}
     total_rewards = {agent_id: 0.0 for agent_id in obs.keys()}
 
-    # Estados recurrentes por policy y agente
-    # Ej: rnn_states["a"][0] = state LSTM del agente 0
-    rnn_states = {"a": {}, "p": {}}
-
     step = 0
     while not done["__all__"] and step < max_steps:
         actions = {}
-
         for agent_id, ob in obs.items():
             policy_id = "a" if str(agent_id).isdigit() else "p"
-            policy = trainer.get_policy(policy_id)
-
-            # Elegir el preprocesador correcto
-            if policy_id == "a":
-                flat_ob = preproc_a.transform(ob)
-            else:
-                flat_ob = preproc_p.transform(ob)
-
-            # Obtener el estado previo del LSTM (o inicial si no existe)
-            state = rnn_states.get(policy_id, {}).get(agent_id)
-            if state is None:
-                state = policy.get_initial_state()  # [] si no hay LSTM
-                if policy_id not in rnn_states:
-                    rnn_states[policy_id] = {}
-                rnn_states[policy_id][agent_id] = state
-
-            # compute_single_action devuelve (action, new_state, extra_info)
-            action, new_state, _ = policy.compute_single_action(
-                flat_ob,
-                state=state,
-                explore=False,  # evaluación determinista
-            )
-
-            # Guardamos nuevo estado
-            rnn_states[policy_id][agent_id] = new_state
+            action = trainer.compute_action(ob, policy_id=policy_id)
             actions[agent_id] = action
 
         obs, rew, done, _info = env_obj.step(actions)
@@ -453,7 +434,6 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
     print("  Recompensa total por agente:")
     for agent_id, r in total_rewards.items():
         print(f"    {agent_id}: {r}")
-
 
 
 # -------------------------------------------------------------------
@@ -490,21 +470,23 @@ def save_history_to_csv(history, filepath):
 
 def main(planner=True):
     """
-    Pipeline de Fase 2 (entrenamiento del planner):
-    1. Carga configuración desde YAML.
-    2. Crea el entorno.
-    3. Construye el PPOTrainer multi-agente.
-    4. Carga pesos de agentes desde Fase 1 y los congela.
-    5. (Opcional) Carga pesos previos del planner.
-    6. Entrena por N iteraciones.
-    7. Guarda pesos y CSV de métricas.
-    8. Ejecuta un episodio de evaluación.
+    Fase 2 (entrenamiento del planner):
+
+    - Si NO se pasa --restore-checkpoint:
+        * Se cargan pesos de agentes desde Fase 1 (restore_tf_weights_agents).
+        * Opcionalmente pesos iniciales de planner (restore_tf_weights_planner).
+        * Se entrena desde cero en Fase 2.
+
+    - Si SÍ se pasa --restore-checkpoint:
+        * Se restaura trainer completo (agentes + planner + optimizer + contadores).
+        * NO se vuelven a cargar los pesos de Fase 1 encima.
     """
-    run_configuration, run_dir = process_args()
+    run_configuration, run_dir, restore_checkpoint = process_args()
 
     logger.info("=" * 70)
     logger.info("Iniciando entrenamiento FASE 2 (PLANNER) con AI-Economist")
     logger.info(f"Run directory: {run_dir}")
+    logger.info(f"Checkpoint a restaurar (planner): {restore_checkpoint}")
     logger.info("=" * 70)
 
     env_config = build_env_config(run_configuration)
@@ -513,58 +495,72 @@ def main(planner=True):
 
     logger.info("Inicializando Ray...")
     ray.init(include_dashboard=False, log_to_driver=False)
+    logger_creator = create_tb_logger_creator(run_dir)
 
     logger.info("Creando PPOTrainer...")
-    trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
+    trainer = PPOTrainer(
+        env=RLlibEnvWrapper,
+        config=trainer_config,
+        logger_creator=logger_creator,
+    )
+    print(f"\nTensorBoard logs se están guardando en: {trainer.logdir}\n")
 
-    # ---- Carga de pesos de Fase 1 (agentes) y planner (opcional) ----
     general_cfg = run_configuration.get("general", {})
     train_planner_flag = general_cfg.get("train_planner", True)
 
-    restore_agents_path = general_cfg.get("restore_tf_weights_agents", "")
-    restore_planner_path = general_cfg.get("restore_tf_weights_planner", "")
+    # ----------------------------------------------------------------
+    #  A) Si hay checkpoint completo, reanudar desde ahí
+    # ----------------------------------------------------------------
+    if restore_checkpoint is not None and os.path.exists(restore_checkpoint):
+        logger.info(f"Restaurando trainer (planner) desde checkpoint: {restore_checkpoint}")
+        trainer.restore(restore_checkpoint)
 
-    # Cargar pesos de agentes entrenados en Fase 1
-    if restore_agents_path and os.path.exists(restore_agents_path):
-        logger.info(f"Cargando pesos pre-entrenados de agentes desde: {restore_agents_path}")
-        try:
-            state_dict = torch.load(restore_agents_path, map_location="cpu")
-            trainer.get_policy("a").model.load_state_dict(state_dict)
-            logger.info("Pesos de política 'a' (agentes) cargados exitosamente.")
-
-            # Congelar pesos de agentes si estamos entrenando planner
-            if train_planner_flag:
-                logger.info("Pesos de agentes utilizados para entrenar en Fase 2.")
-                #for param in trainer.get_policy("a").model.parameters():
-                    #param.requires_grad = False
-                #logger.info("Pesos de agentes CONGELADOS (no se entrenarán en Fase 2).")
-        except Exception as e:
-            logger.error(f"Error al cargar pesos de agentes: {e}")
-            logger.warning("Continuando con pesos aleatorios para agentes.")
     else:
-        if train_planner_flag:
-            logger.warning("Fase 2 activada (train_planner=True) pero no se encontraron pesos de agentes.")
-            logger.warning(f"  Path de agentes especificado: {restore_agents_path}")
+        # ----------------------------------------------------------------
+        #  B) Si NO hay checkpoint, arrancar Fase 2 "normal":
+        #     cargar pesos Fase 1 para agentes (y planner opcional).
+        # ----------------------------------------------------------------
+        restore_agents_path = general_cfg.get("restore_tf_weights_agents", "")
+        restore_planner_path = general_cfg.get("restore_tf_weights_planner", "")
 
-    # Cargar pesos previos del planner (opcional)
-    if restore_planner_path and os.path.exists(restore_planner_path):
-        logger.info(f"Cargando pesos pre-entrenados de planner desde: {restore_planner_path}")
-        try:
-            state_dict = torch.load(restore_planner_path, map_location="cpu")
-            trainer.get_policy("p").model.load_state_dict(state_dict)
-            logger.info("Pesos de política 'p' (planner) cargados exitosamente.")
-        except Exception as e:
-            logger.error(f"Error al cargar pesos de planner: {e}")
-            logger.warning("Continuando con pesos aleatorios para planner.")
+        # Cargar pesos de agentes entrenados en Fase 1
+        if restore_agents_path and os.path.exists(restore_agents_path):
+            logger.info(f"Cargando pesos pre-entrenados de agentes desde: {restore_agents_path}")
+            try:
+                state_dict = torch.load(restore_agents_path, map_location="cpu")
+                trainer.get_policy("a").model.load_state_dict(state_dict)
+                logger.info("Pesos de política 'a' (agentes) cargados exitosamente.")
+                if train_planner_flag:
+                    logger.info("Pesos de agentes utilizados para entrenar en Fase 2.")
+            except Exception as e:
+                logger.error(f"Error al cargar pesos de agentes: {e}")
+                logger.warning("Continuando con pesos aleatorios para agentes.")
+        else:
+            if train_planner_flag:
+                logger.warning("Fase 2 activada (train_planner=True) pero no se encontraron pesos de agentes.")
+                logger.warning(f"  Path de agentes especificado: {restore_agents_path}")
+
+        # Cargar pesos previos del planner (opcional, solo la primera vez)
+        if restore_planner_path and os.path.exists(restore_planner_path):
+            logger.info(f"Cargando pesos pre-entrenados de planner desde: {restore_planner_path}")
+            try:
+                state_dict = torch.load(restore_planner_path, map_location="cpu")
+                trainer.get_policy("p").model.load_state_dict(state_dict)
+                logger.info("Pesos de política 'p' (planner) cargados exitosamente.")
+            except Exception as e:
+                logger.error(f"Error al cargar pesos de planner: {e}")
+                logger.warning("Continuando con pesos aleatorios para planner.")
 
     # ---- Entrenamiento ----
     num_iterations = general_cfg.get("num_iterations", 100)
     logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
 
-    history = train(trainer, num_iters=num_iterations, planner=planner)
+    history, last_checkpoint = train(trainer, num_iters=num_iterations, planner=planner)
+    logger.info(f"Último checkpoint RLlib (planner): {last_checkpoint}")
 
     # Guardar historial
-    csv_path = os.path.join(run_dir, "ppo_results_with_planner.csv")
+    os.makedirs("nuevo_con_lstm", exist_ok=True)
+    csv_path = "nuevo_con_lstm/ppo_results_with_planner.csv"
     save_history_to_csv(history, csv_path)
 
     # Evaluación
