@@ -157,7 +157,7 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
             nn.Tanh()
         )
 
-        concat_dim = cnn_out_dim + 32
+        concat_dim = cnn_out_dim + flat_dim
         
         # --- 3. RAMAS GEMELAS ---
         
