@@ -97,8 +97,9 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
        - Rama Actor: 2 capas de 256 (Tanh) -> Acción.
        - Rama Crítico: 2 capas de 256 (Tanh) -> Valor.
     """
-    def _init_(self, obs_space, action_space, num_outputs, model_config, name):
-        TorchModelV2._init_(self, obs_space, action_space, num_outputs, model_config, name)
+    # --- CORRECCIÓN AQUÍ: __init__ (doble guion bajo) ---
+    def __init__(self, obs_space, action_space, num_outputs, model_config, name):
+        TorchModelV2.__init__(self, obs_space, action_space, num_outputs, model_config, name)
         nn.Module.__init__(self)
 
         self.spatial_key = "world-map"
@@ -154,7 +155,6 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
         concat_dim = cnn_out_dim + 32
         
         # --- 3. RAMAS GEMELAS (Igualando tu Baseline) ---
-        # En lugar de una sola hidden_layer, creamos dos caminos separados.
         
         # RAMA ACTOR (Decide qué hacer)
         # Replica: Linear -> Tanh -> Linear -> Tanh (256 neuronas)
@@ -203,8 +203,8 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
                 flat_input = torch.cat(flat_parts, dim=1)
             else:
                 # Caso borde si solo hubiera mapa
-                device = input_dict["obs_flat"].device if "obs_flat" in input_dict else map_input.device
-                flat_input = torch.zeros(map_input.shape[0], 0).to(device)
+                device = map_input.device if cnn_out is not None else torch.device("cpu")
+                flat_input = torch.zeros(obs[list(obs.keys())[0]].shape[0], 0).to(device)
         else:
             flat_input = obs.float()
 
@@ -374,7 +374,7 @@ def build_trainer_config(env_obj, run_configuration, env_config):
             "policies_to_train": policies_to_train,
             "policy_mapping_fn": policy_mapping_fn,
         },
-        "num_workers": trainer_yaml_config.get("num_workers", 12), # Ajustado a 4 por seguridad
+        "num_workers": trainer_yaml_config.get("num_workers", 12),
         "num_envs_per_worker": trainer_yaml_config.get("num_envs_per_worker", 2),
         "framework": "torch",
         "num_gpus": trainer_yaml_config.get("num_gpus", 0),
