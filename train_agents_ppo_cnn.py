@@ -153,7 +153,7 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
         # Usamos Tanh para ser consistentes con el baseline
         # flat_dim ahora valdrá 378 (sin la action mask)
         self.flat_processor = nn.Sequential(
-            nn.Linear(flat_dim, 32),
+            nn.Linear(flat_dim, flat_dim),
             nn.Tanh()
         )
 
