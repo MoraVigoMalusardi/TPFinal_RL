@@ -13,10 +13,10 @@ def load_series(csv_path: Path, y_col: str):
     df = pd.read_csv(csv_path)
 
     # Asegurar numérico
-    if "iteration" in df.columns:
-        df["iteration"] = pd.to_numeric(df["iteration"], errors="coerce")
+    if "timesteps_total" in df.columns:
+        df["timesteps_total"] = pd.to_numeric(df["timesteps_total"], errors="coerce")
     else:
-        df["iteration"] = pd.Series(range(1, len(df) + 1), name="iteration")
+        df["timesteps_total"] = pd.Series(range(1, len(df) + 1), name="timesteps_total")
 
     if y_col not in df.columns:
         raise ValueError(f"Columna '{y_col}' no encontrada en {csv_path}")
@@ -25,7 +25,7 @@ def load_series(csv_path: Path, y_col: str):
 
     # Filtrar NaNs iniciales por las dudas
     mask = df[y_col].notna()
-    x = df.loc[mask, "iteration"]
+    x = df.loc[mask, "timesteps_total"]
     y = df.loc[mask, y_col]
 
     return x, y
@@ -37,10 +37,10 @@ def plot_comparison(csv_paths, labels, y_col, title, ylabel, out_path: Path, sho
 
     for csv_path, label in zip(csv_paths, labels):
         x, y = load_series(csv_path, y_col)
-        plt.plot(x, y, marker="o", linewidth=1.5, label=label)
+        plt.plot(x, y, linewidth=1.5, label=label)
 
     plt.title(title)
-    plt.xlabel("Iteración")
+    plt.xlabel("timesteps")
     plt.ylabel(ylabel)
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.legend()
@@ -91,7 +91,7 @@ def main():
         csv_paths=[fm_sin, fm_con],
         labels=["Sin LSTM", "Con LSTM"],
         y_col="policy_a_reward_mean",
-        title="Free Market – reward medio de agentes vs iteración",
+        title="Free Market – reward medio de agentes vs timesteps",
         ylabel="Reward medio (policy a)",
         out_path=outdir / "free_market_agents_lstm_vs_no_lstm.png",
         show=args.show,
@@ -107,7 +107,7 @@ def main():
         csv_paths=[pl_sin, pl_con],
         labels=["Sin LSTM", "Con LSTM"],
         y_col="policy_p_reward_mean",
-        title="AI-Economist – reward medio del planner vs iteración",
+        title="AI-Economist – reward medio del planner vs timesteps",
         ylabel="Reward medio (policy p)",
         out_path=outdir / "ai_economist_planner_lstm_vs_no_lstm.png",
         show=args.show,
