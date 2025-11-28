@@ -99,7 +99,7 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
     """
     def _init_(self, obs_space, action_space, num_outputs, model_config, name):
         TorchModelV2._init_(self, obs_space, action_space, num_outputs, model_config, name)
-        nn.Module._init_(self)
+        nn.Module.__init__(self)
 
         self.spatial_key = "world-map"
         
