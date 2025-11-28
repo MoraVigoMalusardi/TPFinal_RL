@@ -97,7 +97,6 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
        - Rama Actor: 2 capas de 256 (Tanh) -> Acción.
        - Rama Crítico: 2 capas de 256 (Tanh) -> Valor.
     """
-    # --- CORRECCIÓN AQUÍ: __init__ (doble guion bajo) ---
     def __init__(self, obs_space, action_space, num_outputs, model_config, name):
         TorchModelV2.__init__(self, obs_space, action_space, num_outputs, model_config, name)
         nn.Module.__init__(self)
@@ -113,6 +112,12 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
             for key, space in original_space.spaces.items():
                 if key == self.spatial_key:
                     spatial_shape = space.shape
+                # --- CORRECCIÓN AQUÍ ---
+                # Debemos ignorar action_mask al calcular el tamaño de entrada de la MLP
+                # porque en el forward no se lo pasamos a la red.
+                elif key == "action_mask":
+                    continue 
+                # -----------------------
                 else:
                     flat_dim += int(np.prod(space.shape))
         else:
@@ -127,14 +132,13 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
                 # Capa 1: Stride 1 (Mantiene resolución)
                 nn.Conv2d(in_channels, 16, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
-                # Capa 2: Stride 2 (Reduce a la mitad) -> Reemplaza al MaxPool para ser más preciso
+                # Capa 2: Stride 2 (Reduce a la mitad)
                 nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1), 
                 nn.ReLU(),
                 nn.Flatten()
             )
             
             # Cálculo dinámico del tamaño de salida
-            # Creamos un tensor dummy con el formato correcto [1, C, H, W]
             dummy_shape = (1, in_channels, spatial_shape[1], spatial_shape[2])
             dummy_input = torch.zeros(dummy_shape)
             with torch.no_grad():
@@ -147,6 +151,7 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
 
         # --- 2. Rama Flat (Inventario) ---
         # Usamos Tanh para ser consistentes con el baseline
+        # flat_dim ahora valdrá 378 (sin la action mask)
         self.flat_processor = nn.Sequential(
             nn.Linear(flat_dim, 32),
             nn.Tanh()
@@ -154,10 +159,9 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
 
         concat_dim = cnn_out_dim + 32
         
-        # --- 3. RAMAS GEMELAS (Igualando tu Baseline) ---
+        # --- 3. RAMAS GEMELAS ---
         
-        # RAMA ACTOR (Decide qué hacer)
-        # Replica: Linear -> Tanh -> Linear -> Tanh (256 neuronas)
+        # RAMA ACTOR
         self.actor_layers = nn.Sequential(
             nn.Linear(concat_dim, 256),
             nn.Tanh(),
@@ -166,8 +170,7 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
         )
         self.action_head = nn.Linear(256, num_outputs)
 
-        # RAMA CRÍTICO (Estima el valor)
-        # Replica: _value_branch_separate de tu baseline
+        # RAMA CRÍTICO
         self.critic_layers = nn.Sequential(
             nn.Linear(concat_dim, 256),
             nn.Tanh(),
@@ -202,9 +205,12 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
             if flat_parts:
                 flat_input = torch.cat(flat_parts, dim=1)
             else:
-                # Caso borde si solo hubiera mapa
-                device = map_input.device if cnn_out is not None else torch.device("cpu")
-                flat_input = torch.zeros(obs[list(obs.keys())[0]].shape[0], 0).to(device)
+                # Caso borde robusto
+                if cnn_out is not None:
+                    dev = cnn_out.device
+                else:
+                    dev = torch.device("cpu")
+                flat_input = torch.zeros(obs[list(obs.keys())[0]].shape[0], 0).to(dev)
         else:
             flat_input = obs.float()
 
@@ -216,7 +222,7 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
         else:
             features = flat_out
             
-        # D. Caminos Separados (Igual al Baseline)
+        # D. Caminos Separados
         
         # Camino del Actor
         actor_out = self.actor_layers(features)
