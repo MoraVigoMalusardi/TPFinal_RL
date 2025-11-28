@@ -51,25 +51,25 @@ def main():
         df = pd.read_csv(csv_path)
 
         # Asegurar numérico
-        for col in ["iteration", "policy_a_reward_mean"]:
+        for col in ["timesteps_total", "policy_a_reward_mean"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
         # Eje X
-        if "iteration" in df.columns and df["iteration"].notna().any():
-            x = df["iteration"]
+        if "timesteps_total" in df.columns and df["timesteps_total"].notna().any():
+            x = df["timesteps_total"]
         else:
-            x = pd.Series(range(1, len(df) + 1), name="iteration")
+            x = pd.Series(range(1, len(df) + 1), name="timesteps_total")
 
         if "policy_a_reward_mean" not in df.columns:
             print(f"Warning: 'policy_a_reward_mean' not in {csv_path}, skipping.")
             continue
 
         y = df["policy_a_reward_mean"]
-        plt.plot(x, y, marker="o", linewidth=1.5, label=label)
+        plt.plot(x, y, linewidth=1.5, label=label)
 
-    plt.title("Policy a - mean reward vs iteration")
-    plt.xlabel("Iteration")
+    plt.title("Policy a - mean reward vs timesteps")
+    plt.xlabel("timesteps")
     plt.ylabel("Mean reward (policy a)")
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.legend()
