@@ -90,139 +90,146 @@ class SafeEnvWrapper(MultiAgentEnv):
 # -------------------------------------------------------------------
 class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
     """
-    Procesa 'world-map' con una CNN y el resto de datos planos con una MLP.
-    Luego concatena ambos vectores para decidir la acción.
+    Arquitectura CIENTÍFICA para comparación justa (A/B Test):
+    1. Input: CNN (Optimizada con Stride=2) + Inventario Flat.
+    2. Fusión.
+    3. RAMAS SEPARADAS (Igual que el baseline 'vf_share_layers: false'):
+       - Rama Actor: 2 capas de 256 (Tanh) -> Acción.
+       - Rama Crítico: 2 capas de 256 (Tanh) -> Valor.
     """
-    def __init__(self, obs_space, action_space, num_outputs, model_config, name):
-        TorchModelV2.__init__(self, obs_space, action_space, num_outputs, model_config, name)
-        nn.Module.__init__(self)
+    def _init_(self, obs_space, action_space, num_outputs, model_config, name):
+        TorchModelV2._init_(self, obs_space, action_space, num_outputs, model_config, name)
+        nn.Module._init_(self)
 
         self.spatial_key = "world-map"
         
-        # Detectar formas del espacio de observación original
-        # Como usamos flatten_observations=False, obs_space.original_space suele ser un Dict
+        # --- Detección de Inputs ---
         original_space = obs_space.original_space if hasattr(obs_space, "original_space") else obs_space
-        
         spatial_shape = None
         flat_dim = 0
 
-        # Iteramos sobre el Dict space para separar lo visual de lo plano
         if hasattr(original_space, "spaces"):
             for key, space in original_space.spaces.items():
                 if key == self.spatial_key:
-                    # El mapa suele venir como [Height, Width, Channels]
-                    spatial_shape = space.shape 
-                elif key == "action_mask":
-                    pass # La máscara no entra a la red neuronal como feature
+                    spatial_shape = space.shape
                 else:
-                    # Sumamos las dimensiones de todo lo demás (inventario, skills, etc)
                     flat_dim += int(np.prod(space.shape))
         else:
-            # Fallback por si llega algo plano (no debería con la config correcta)
             flat_dim = int(np.prod(obs_space.shape))
 
-        # --- A. Rama CNN (Visión) ---
+        # --- 1. Rama CNN (Visión) - Stride 2 para velocidad ---
         if spatial_shape:
-            # PyTorch usa [Channels, Height, Width], RLlib/Gym suele dar [H, W, C]
-            # Asumimos que channels es la dimensión más pequeña (usualmente 3 o canales de recursos)
-            in_channels = spatial_shape[2] 
+            # Detectar canales (usualmente 7)
+            in_channels = spatial_shape[0] if spatial_shape[0] < spatial_shape[2] else spatial_shape[2]
             
             self.cnn = nn.Sequential(
+                # Capa 1: Stride 1 (Mantiene resolución)
                 nn.Conv2d(in_channels, 16, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
-                nn.MaxPool2d(2),
-                nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+                # Capa 2: Stride 2 (Reduce a la mitad) -> Reemplaza al MaxPool para ser más preciso
+                nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1), 
                 nn.ReLU(),
                 nn.Flatten()
             )
             
-            # Cálculo dinámico de la salida de la CNN
+            # Cálculo dinámico del tamaño de salida
+            # Creamos un tensor dummy con el formato correcto [1, C, H, W]
+            dummy_shape = (1, in_channels, spatial_shape[1], spatial_shape[2])
+            dummy_input = torch.zeros(dummy_shape)
             with torch.no_grad():
-                # Creamos un tensor dummy [Batch, H, W, C] -> Permute -> [Batch, C, H, W]
-                dummy_input = torch.zeros(1, spatial_shape[0], spatial_shape[1], in_channels)
-                dummy_input = dummy_input.permute(0, 3, 1, 2)
-                cnn_out_shape = self.cnn(dummy_input).shape
-                cnn_out_dim = cnn_out_shape[1]
+                cnn_out_dim = self.cnn(dummy_input).shape[1]
                 
-            logger.info(f"CNN inicializada. Canales in: {in_channels}, Salida plana: {cnn_out_dim}")
+            logger.info(f"CNN inicializada. Stride=2. Salida plana: {cnn_out_dim}")
         else:
             self.cnn = None
             cnn_out_dim = 0
-            logger.warning("No se encontró 'world-map' en el espacio. La CNN estará desactivada.")
 
-        # --- B. Rama MLP (Stats) ---
+        # --- 2. Rama Flat (Inventario) ---
+        # Usamos Tanh para ser consistentes con el baseline
         self.flat_processor = nn.Sequential(
-            nn.Linear(flat_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU()
+            nn.Linear(flat_dim, 32),
+            nn.Tanh()
         )
 
-        # --- C. Fusión y Salida ---
-        concat_dim = cnn_out_dim + 64
+        concat_dim = cnn_out_dim + 32
         
-        self.hidden_layer = nn.Sequential(
+        # --- 3. RAMAS GEMELAS (Igualando tu Baseline) ---
+        # En lugar de una sola hidden_layer, creamos dos caminos separados.
+        
+        # RAMA ACTOR (Decide qué hacer)
+        # Replica: Linear -> Tanh -> Linear -> Tanh (256 neuronas)
+        self.actor_layers = nn.Sequential(
             nn.Linear(concat_dim, 256),
-            nn.ReLU()
+            nn.Tanh(),
+            nn.Linear(256, 256),
+            nn.Tanh()
         )
+        self.action_head = nn.Linear(256, num_outputs)
 
-        self.action_branch = nn.Linear(256, num_outputs)
-        self.value_branch = nn.Linear(256, 1)
+        # RAMA CRÍTICO (Estima el valor)
+        # Replica: _value_branch_separate de tu baseline
+        self.critic_layers = nn.Sequential(
+            nn.Linear(concat_dim, 256),
+            nn.Tanh(),
+            nn.Linear(256, 256),
+            nn.Tanh()
+        )
+        self.value_head = nn.Linear(256, 1)
+        
         self._cur_value = None
 
     @override(TorchModelV2)
     def forward(self, input_dict, state, seq_lens):
-        # input_dict["obs"] es un diccionario de tensores si flatten_observations=False
         obs = input_dict["obs"]
-        
-        cnn_out = None
         flat_parts = []
+        cnn_out = None
 
-        # 1. Procesar Mapa con CNN
+        # A. Procesar Mapa
         if self.cnn is not None:
             if isinstance(obs, dict) and self.spatial_key in obs:
-                # Entrada: [Batch, H, W, C]
                 map_input = obs[self.spatial_key].float()
-                # PyTorch necesita: [Batch, C, H, W]
-                map_input = map_input.permute(0, 3, 1, 2)
+                # Ajuste de canales: [B, H, W, C] -> [B, C, H, W]
+                if map_input.shape[-1] < map_input.shape[1]: 
+                     map_input = map_input.permute(0, 3, 1, 2)
                 cnn_out = self.cnn(map_input)
-            else:
-                # Si por error llega plano pero esperábamos CNN, fallamos o warn
-                pass
 
-        # 2. Procesar Vector Plano (Resto de keys)
+        # B. Procesar Vector Plano
         if isinstance(obs, dict):
             for key, val in obs.items():
                 if key != self.spatial_key and key != "action_mask":
-                    # Aplanar cualquier sub-estructura [Batch, ...] -> [Batch, Features]
                     flat_parts.append(val.float().reshape(val.shape[0], -1))
             
             if flat_parts:
                 flat_input = torch.cat(flat_parts, dim=1)
             else:
-                flat_input = torch.zeros(obs[list(obs.keys())[0]].shape[0], 0).to(input_dict["obs_flat"].device)
+                # Caso borde si solo hubiera mapa
+                device = input_dict["obs_flat"].device if "obs_flat" in input_dict else map_input.device
+                flat_input = torch.zeros(map_input.shape[0], 0).to(device)
         else:
-            # Si obs no es dict, asumimos que todo es flat input
             flat_input = obs.float()
 
         flat_out = self.flat_processor(flat_input)
 
-        # 3. Concatenar
+        # C. Fusionar
         if cnn_out is not None:
-            combined = torch.cat([cnn_out, flat_out], dim=1)
+            features = torch.cat([cnn_out, flat_out], dim=1)
         else:
-            combined = flat_out
+            features = flat_out
             
-        # 4. Forward final
-        x = self.hidden_layer(combined)
+        # D. Caminos Separados (Igual al Baseline)
         
-        logits = self.action_branch(x)
-        self._cur_value = self.value_branch(x).squeeze(1)
+        # Camino del Actor
+        actor_out = self.actor_layers(features)
+        logits = self.action_head(actor_out)
+        
+        # Camino del Crítico (Value)
+        critic_out = self.critic_layers(features)
+        self._cur_value = self.value_head(critic_out).squeeze(1)
 
-        # Si hay action mask, aplicarla (Opcional, RLlib suele manejarlo si se registra)
+        # Aplicar Action Mask si existe
         if isinstance(obs, dict) and "action_mask" in obs:
-            inf_mask = torch.clamp(torch.log(obs["action_mask"]), min=-1e10)
-            logits = logits + inf_mask
+             inf_mask = torch.clamp(torch.log(obs["action_mask"]), min=-1e10)
+             logits = logits + inf_mask
 
         return logits, state
 
