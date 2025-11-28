@@ -68,7 +68,7 @@ def main():
         y = df["policy_a_reward_mean"]
         plt.plot(x, y, marker="o", linewidth=1.5, label=label)
 
-    plt.title("Policy a - mean reward vs iteration (comparison)")
+    plt.title("Policy a - mean reward vs iteration")
     plt.xlabel("Iteration")
     plt.ylabel("Mean reward (policy a)")
     plt.grid(True, linestyle="--", alpha=0.4)
