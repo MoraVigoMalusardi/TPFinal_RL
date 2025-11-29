@@ -292,7 +292,7 @@ def compare_ai_architectures():
     results_mlp = evaluate_trainer_on_env(
         mlp_trainer,
         mlp_env,
-        policy_name="AI Econ - MLP",
+        policy_name="MLP",
         n_episodes=10,
         use_lstm=False,
     )
@@ -311,7 +311,7 @@ def compare_ai_architectures():
     results_lstm = evaluate_trainer_on_env(
         lstm_trainer,
         lstm_env,
-        policy_name="AI Econ - LSTM+MLP",
+        policy_name="LSTM+MLP",
         n_episodes=10,
         use_lstm=True,
         lstm_cell_size=128,  
@@ -331,7 +331,7 @@ def compare_ai_architectures():
     results_cnn = evaluate_trainer_on_env(
         cnn_trainer,
         cnn_env,
-        policy_name="AI Econ - CNN+MLP",
+        policy_name="CNN+MLP",
         n_episodes=10,
         use_lstm=False,
     )
