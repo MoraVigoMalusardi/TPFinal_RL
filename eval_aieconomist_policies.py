@@ -133,6 +133,18 @@ def build_ai_trainer_cnn(config_path, agents_ckpt, planner_ckpt):
 # Evaluación genérica sobre un trainer + env existente
 # -------------------------------------------------------------------
 
+def get_base_env(env_obj):
+    """
+    Devuelve el entorno base que tiene .world.agents.
+    - Para MLP/LSTM: env_obj es RLlibEnvWrapper -> usar env_obj.env
+    - Para CNN: env_obj es SafeEnvWrapper -> usar env_obj.internal_env.env
+    """
+    if hasattr(env_obj, "env"):
+        return env_obj.env
+    if hasattr(env_obj, "internal_env") and hasattr(env_obj.internal_env, "env"):
+        return env_obj.internal_env.env
+    raise AttributeError("No pude encontrar atributo .env ni .internal_env.env en env_obj")
+
 def evaluate_trainer_on_env(
     trainer,
     env_obj,
@@ -152,6 +164,9 @@ def evaluate_trainer_on_env(
     print(f"Evaluando: {policy_name}")
     print(f"{'='*70}")
 
+    # --- NUEVO: obtenemos el env base (AI-Economist) ---
+    base_env = get_base_env(env_obj)
+
     all_productivity = []
     all_equality = []
     all_gini = []
@@ -169,7 +184,8 @@ def evaluate_trainer_on_env(
                 init_state = trainer.get_policy(policy_id).get_initial_state()
                 lstm_states[(agent_id, policy_id)] = init_state
 
-        initial_coins = [agent.total_endowment('Coin') for agent in env_obj.env.world.agents]
+        # --- CAMBIO: usamos base_env en vez de env_obj.env ---
+        initial_coins = [agent.total_endowment('Coin') for agent in base_env.world.agents]
         print(f"\n  Initial coins: {[f'{c:.1f}' for c in initial_coins]}")
 
         while not done["__all__"] and step < max_steps:
@@ -202,7 +218,8 @@ def evaluate_trainer_on_env(
             if step % 100 == 0:
                 print(f"    Step {step+1} done with rewards {rew}")
 
-                current_coins = [agent.total_endowment('Coin') for agent in env_obj.env.world.agents]
+                # --- CAMBIO: también acá usamos base_env ---
+                current_coins = [agent.total_endowment('Coin') for agent in base_env.world.agents]
                 print(f"    Current coins: {[f'{c:.1f}' for c in current_coins]}")
 
                 coin_changes = [curr - init for curr, init in zip(current_coins, initial_coins)]
@@ -210,10 +227,10 @@ def evaluate_trainer_on_env(
 
             step += 1
 
-        # Métricas del episodio
+        # Métricas del episodio (otra vez base_env)
         final_coins = np.array([
             agent.total_endowment('Coin')
-            for agent in env_obj.env.world.agents
+            for agent in base_env.world.agents
         ])
 
         productivity = final_coins.sum()
