@@ -39,20 +39,27 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     
     env_config = build_env_config_cnn(run_configuration)
     env_obj = create_env_for_inspection_cnn(env_config)
-    
+
+    # ==== NUEVO: localizar el entorno "core" de AI-Economist ====
+    # env_obj: SafeEnvWrapper
+    # env_obj.base_env: RLlibEnvWrapper
+    # env_core: entorno de AI-Economist con .components y .world
+    inner_env = getattr(env_obj, "base_env", env_obj)
+    env_core = getattr(inner_env, "env", inner_env)
+    # ============================================================
+
     last_episode_tax_history = [] 
     brackets = [] 
 
-    # --- NUEVO: listas para métricas ---
     all_productivity = []
     all_equality = []
     all_gini = []
 
     # -----------------------------------------------------------
-    # 1. DETECCIÓN DE BRACKETS
+    # 1. DETECCIÓN DE BRACKETS (usar env_core, no env_obj)
     # -----------------------------------------------------------
     tax_component = None
-    for comp in env_obj.env.components:
+    for comp in env_core.components:
         if "Tax" in str(type(comp)):
             tax_component = comp
             if hasattr(comp, 'bracket_cutoffs'):
@@ -78,7 +85,7 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
         current_episode_taxes = []
         
         # para métricas de este episodio
-        initial_coins = [agent.total_endowment('Coin') for agent in env_obj.env.world.agents]
+        initial_coins = [agent.total_endowment('Coin') for agent in env_core.world.agents]
 
         last_planner_action_rates = np.zeros(len(brackets))
 
@@ -128,10 +135,9 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
             current_episode_taxes.append(last_planner_action_rates)
             step += 1
         
-        # --- NUEVO: métricas del episodio ---
         final_coins = np.array([
             agent.total_endowment('Coin')
-            for agent in env_obj.env.world.agents
+            for agent in env_core.world.agents
         ])
 
         productivity = final_coins.sum()
