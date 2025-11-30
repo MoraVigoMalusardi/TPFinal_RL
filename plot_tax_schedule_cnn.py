@@ -28,36 +28,18 @@ def gini(array):
     index = np.arange(1, n + 1)
     return (2 * np.sum(index * sorted_array)) / (n * np.sum(sorted_array)) - (n + 1) / n
 
-def get_core_env(env):
+def get_base_env(env_obj):
     """
-    Desenvuelve wrappers (SafeEnvWrapper, RLlibEnvWrapper, etc.)
-    hasta encontrar un objeto que tenga .components y .world.
-    Si no lo encuentra, devuelve env tal cual.
+    Devuelve el entorno base de AI-Economist que tiene .world.agents.
+    - MLP/LSTM: env_obj es RLlibEnvWrapper  -> usar env_obj.env
+    - CNN:      env_obj es SafeEnvWrapper   -> usar env_obj.internal_env.env
     """
-    visited = set()
-    current = env
+    if hasattr(env_obj, "env"):
+        return env_obj.env
+    if hasattr(env_obj, "internal_env") and hasattr(env_obj.internal_env, "env"):
+        return env_obj.internal_env.env
+    raise AttributeError("No pude encontrar atributo .env ni .internal_env.env en env_obj")
 
-    while True:
-        # Si ya es el core de AI-Economist, lo devolvemos
-        if hasattr(current, "components") and hasattr(current, "world"):
-            return current
-
-        visited.add(id(current))
-        next_env = None
-
-        # Probar atributos típicos que encadenan wrappers
-        for attr in ["env", "base_env", "unwrapped", "_env"]:
-            if hasattr(current, attr):
-                candidate = getattr(current, attr)
-                if candidate is not None and id(candidate) not in visited:
-                    next_env = candidate
-                    break
-
-        # Si no hay más para desarmar, devolvemos el original
-        if next_env is None:
-            return env
-
-        current = next_env
 
 def evaluate_policy2(config_path, policy_name, trainer=None, max_steps=1000, n_episodes=5):
     print(f"\n{'='*70}")
@@ -216,12 +198,17 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     with open(config_path, 'r') as f:
         run_configuration = yaml.safe_load(f)
     
+    # 1) Construyo el wrapper que usás para CNN
     env_config = build_env_config_cnn(run_configuration)
     env_obj = create_env_for_inspection_cnn(env_config)
 
-    # Desenrollar wrappers hasta llegar al entorno AI-Economist core
-    env_core = get_core_env(env_obj)
-    print(f"[DEBUG] Tipo de env_core: {type(env_core)}")
+    # 2) Obtengo el entorno base tal como hacías en evaluate_trainer_on_env
+    base_env = get_base_env(env_obj)      # esto ya funciona para CNN y MLP/LSTM
+    # En muchos casos base_env ya ES el entorno AI-Economist; si no, lo desempaquetamos un paso más:
+    env_core = getattr(base_env, "env", base_env)
+
+    print(f"[DEBUG] base_env: {type(base_env)}")
+    print(f"[DEBUG] env_core: {type(env_core)}")
 
     last_episode_tax_history = [] 
     brackets = [] 
@@ -234,14 +221,15 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     # 1. DETECCIÓN DE BRACKETS (usar env_core)
     # -----------------------------------------------------------
     tax_component = None
-    for comp in env_core.components:
-        if "Tax" in str(type(comp)):
-            tax_component = comp
-            if hasattr(comp, 'bracket_cutoffs'):
-                brackets = comp.bracket_cutoffs
-            elif hasattr(comp, 'brackets'):
-                brackets = comp.brackets
-            break
+    if hasattr(env_core, "components"):
+        for comp in env_core.components:
+            if "Tax" in str(type(comp)):
+                tax_component = comp
+                if hasattr(comp, 'bracket_cutoffs'):
+                    brackets = comp.bracket_cutoffs
+                elif hasattr(comp, 'brackets'):
+                    brackets = comp.brackets
+                break
             
     if len(brackets) == 0:
         brackets = [10, 50, 100, 500, 1000, 2000, 5000]
@@ -249,17 +237,17 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     if hasattr(brackets, 'tolist'):
         brackets = brackets.tolist()
     
-    print(f"Componente Fiscal: {type(tax_component).__name__}")
+    print(f"Componente Fiscal: {type(tax_component).__name__ if tax_component is not None else 'None'}")
     print(f"Brackets detectados: {brackets}")
-    # -----------------------------------------------------------
 
+    # -----------------------------------------------------------
     for episode in range(n_episodes):
         obs = env_obj.reset()
         done = {"__all__": False}
         step = 0
         current_episode_taxes = []
         
-        # métricas de este episodio (usar env_core.world.agents)
+        # para métricas de este episodio: usar env_core.world.agents
         initial_coins = [agent.total_endowment('Coin') for agent in env_core.world.agents]
 
         last_planner_action_rates = np.zeros(len(brackets))
@@ -277,8 +265,7 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                 actions[agent_id] = action
 
                 if policy_id == "p":
-                    # {0, 0.05, ..., 1.0} (21 valores) + NO-OP (índice 21)
-                    ACTION_LEVELS = np.linspace(0.0, 1.0, 21)
+                    ACTION_LEVELS = np.linspace(0.0, 1.0, 21)  # [0.00, 0.05, ..., 1.00]
 
                     if hasattr(action, '__iter__'):
                         new_rates = []
@@ -287,7 +274,7 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                             idx = int(idx)
 
                             if idx == 21:
-                                new_rates.append(prev_rate)   # NO-OP
+                                new_rates.append(prev_rate)    # NO-OP
                             else:
                                 new_rates.append(ACTION_LEVELS[idx])
 
@@ -304,6 +291,7 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
             current_episode_taxes.append(last_planner_action_rates)
             step += 1
         
+        # Métricas del episodio: también usando env_core.world.agents
         final_coins = np.array([
             agent.total_endowment('Coin')
             for agent in env_core.world.agents
