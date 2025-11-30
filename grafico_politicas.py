@@ -133,7 +133,7 @@ def compare_all_policies():
     
     # 1. Free Market (sin impuestos)
 
-    config = 'config_free_market.yaml' #ACA VA LA CONFIG DE EVALUACION DE FREE MARKET
+    config = 'configs_eval/free_market.yaml' #ACA VA LA CONFIG DE EVALUACION DE FREE MARKET
     print("\n Cargando pesos del Free Market...")
     with open(config, 'r') as f:   
         free_config = yaml.safe_load(f)
@@ -589,9 +589,9 @@ if __name__ == "__main__":
     #print("\n Resultados guardados en: policy_comparison_results.csv")
     ray.init(ignore_reinit_error=True, log_to_driver=False)
 
-    config = 'config_ai_econ.yaml'  #ACA VA LA CONFIG DE EVALUACION DE AI ECONOMIST
-    agents = 'a_aiecon.pt' #ACA VA EL CHECKPOINT DE LOS AGENTES DE AI ECONOMIST (WITH PLANNER)
-    planner = 'p_aiecon.pt' #ACA VA EL CHECKPOINT DEL PLANNER DE AI ECONOMIST (WITH PLANNER)
+    config = 'phase_ai_econ_eval/config.yaml'  #ACA VA LA CONFIG DE EVALUACION DE AI ECONOMIST
+    agents = 'checkpoints/nuevo_sin_lstm/policy_a_weights_w_planner.pt' #ACA VA EL CHECKPOINT DE LOS AGENTES DE AI ECONOMIST (WITH PLANNER)
+    planner = 'checkpoints/nuevo_sin_lstm/policy_p_weights_w_planner.pt' #ACA VA EL CHECKPOINT DEL PLANNER DE AI ECONOMIST (WITH PLANNER)
 
     with open(config, 'r') as f:
         ai_config = yaml.safe_load(f)
