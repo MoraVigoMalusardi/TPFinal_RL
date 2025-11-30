@@ -28,8 +28,38 @@ def gini(array):
     index = np.arange(1, n + 1)
     return (2 * np.sum(index * sorted_array)) / (n * np.sum(sorted_array)) - (n + 1) / n
 
+def get_core_env(env):
+    """
+    Desenvuelve wrappers (SafeEnvWrapper, RLlibEnvWrapper, etc.)
+    hasta encontrar un objeto que tenga .components y .world.
+    Si no lo encuentra, devuelve env tal cual.
+    """
+    visited = set()
+    current = env
 
-def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_episodes=5):
+    while True:
+        # Si ya es el core de AI-Economist, lo devolvemos
+        if hasattr(current, "components") and hasattr(current, "world"):
+            return current
+
+        visited.add(id(current))
+        next_env = None
+
+        # Probar atributos típicos que encadenan wrappers
+        for attr in ["env", "base_env", "unwrapped", "_env"]:
+            if hasattr(current, attr):
+                candidate = getattr(current, attr)
+                if candidate is not None and id(candidate) not in visited:
+                    next_env = candidate
+                    break
+
+        # Si no hay más para desarmar, devolvemos el original
+        if next_env is None:
+            return env
+
+        current = next_env
+
+def evaluate_policy2(config_path, policy_name, trainer=None, max_steps=1000, n_episodes=5):
     print(f"\n{'='*70}")
     print(f"Evaluando: {policy_name} (MODO HÍBRIDO: Brackets Auto + Acción Directa)")
     print(f"{'='*70}")
@@ -40,12 +70,9 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     env_config = build_env_config_cnn(run_configuration)
     env_obj = create_env_for_inspection_cnn(env_config)
 
-    # ==== NUEVO: localizar el entorno "core" de AI-Economist ====
-    # env_obj: SafeEnvWrapper
-    # env_obj.base_env: RLlibEnvWrapper
-    # env_core: entorno de AI-Economist con .components y .world
-    inner_env = getattr(env_obj, "base_env", env_obj)
-    env_core = getattr(inner_env, "env", inner_env)
+    # Desenrollar wrappers hasta llegar al entorno de AI-Economist
+    env_core = get_core_env(env_obj)
+    print(f"[DEBUG] Tipo de env_core: {type(env_core)}")
     # ============================================================
 
     last_episode_tax_history = [] 
@@ -158,6 +185,148 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
         print(f"  Episode {episode+1} Done.")
     
     # --- NUEVO: promedios finales ---
+    mean_prod = float(np.mean(all_productivity))
+    mean_eq = float(np.mean(all_equality))
+    mean_gini = float(np.mean(all_gini))
+
+    print("\nResultados promediados en modo híbrido:")
+    print(f"  Productivity: {mean_prod:.1f}")
+    print(f"  Equality   : {mean_eq:.3f}")
+    print(f"  Gini       : {mean_gini:.3f}")
+    print(f"  Eq x Prod  : {mean_eq * mean_prod:.1f}")
+
+    results = {
+        'policy_name': policy_name,
+        'tax_history': last_episode_tax_history,
+        'brackets': brackets,
+        'productivity': mean_prod,
+        'equality': mean_eq,
+        'gini': mean_gini,
+        'eq_times_prod': mean_eq * mean_prod,
+    }
+    
+    return results
+
+
+def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_episodes=5):
+    print(f"\n{'='*70}")
+    print(f"Evaluando: {policy_name} (MODO HÍBRIDO: Brackets Auto + Acción Directa)")
+    print(f"{'='*70}")
+    
+    with open(config_path, 'r') as f:
+        run_configuration = yaml.safe_load(f)
+    
+    env_config = build_env_config_cnn(run_configuration)
+    env_obj = create_env_for_inspection_cnn(env_config)
+
+    # Desenrollar wrappers hasta llegar al entorno AI-Economist core
+    env_core = get_core_env(env_obj)
+    print(f"[DEBUG] Tipo de env_core: {type(env_core)}")
+
+    last_episode_tax_history = [] 
+    brackets = [] 
+
+    all_productivity = []
+    all_equality = []
+    all_gini = []
+
+    # -----------------------------------------------------------
+    # 1. DETECCIÓN DE BRACKETS (usar env_core)
+    # -----------------------------------------------------------
+    tax_component = None
+    for comp in env_core.components:
+        if "Tax" in str(type(comp)):
+            tax_component = comp
+            if hasattr(comp, 'bracket_cutoffs'):
+                brackets = comp.bracket_cutoffs
+            elif hasattr(comp, 'brackets'):
+                brackets = comp.brackets
+            break
+            
+    if len(brackets) == 0:
+        brackets = [10, 50, 100, 500, 1000, 2000, 5000]
+    
+    if hasattr(brackets, 'tolist'):
+        brackets = brackets.tolist()
+    
+    print(f"Componente Fiscal: {type(tax_component).__name__}")
+    print(f"Brackets detectados: {brackets}")
+    # -----------------------------------------------------------
+
+    for episode in range(n_episodes):
+        obs = env_obj.reset()
+        done = {"__all__": False}
+        step = 0
+        current_episode_taxes = []
+        
+        # métricas de este episodio (usar env_core.world.agents)
+        initial_coins = [agent.total_endowment('Coin') for agent in env_core.world.agents]
+
+        last_planner_action_rates = np.zeros(len(brackets))
+
+        while not done["__all__"] and step < max_steps:
+            actions = {}
+            for agent_id, ob in obs.items():
+                policy_id = "a" if str(agent_id).isdigit() else "p"
+                
+                if trainer:
+                    action = trainer.compute_action(ob, policy_id=policy_id, explore=False)
+                else:
+                    action = env_obj.action_space.sample()[agent_id]
+                
+                actions[agent_id] = action
+
+                if policy_id == "p":
+                    # {0, 0.05, ..., 1.0} (21 valores) + NO-OP (índice 21)
+                    ACTION_LEVELS = np.linspace(0.0, 1.0, 21)
+
+                    if hasattr(action, '__iter__'):
+                        new_rates = []
+
+                        for idx, prev_rate in zip(action, last_planner_action_rates):
+                            idx = int(idx)
+
+                            if idx == 21:
+                                new_rates.append(prev_rate)   # NO-OP
+                            else:
+                                new_rates.append(ACTION_LEVELS[idx])
+
+                        rates = np.array(new_rates, dtype=float)
+
+                        if len(rates) == len(brackets):
+                            last_planner_action_rates = rates
+                        elif len(rates) > len(brackets):
+                            last_planner_action_rates = rates[:len(brackets)]
+                        else:
+                            last_planner_action_rates[:len(rates)] = rates
+
+            obs, rew, done, info = env_obj.step(actions)    
+            current_episode_taxes.append(last_planner_action_rates)
+            step += 1
+        
+        final_coins = np.array([
+            agent.total_endowment('Coin')
+            for agent in env_core.world.agents
+        ])
+
+        productivity = final_coins.sum()
+        gini_coeff = gini(final_coins)
+        n_agents = len(final_coins)
+        equality = 1 - (n_agents / (n_agents - 1)) * gini_coeff if n_agents > 1 else 1.0
+
+        all_productivity.append(productivity)
+        all_gini.append(gini_coeff)
+        all_equality.append(equality)
+
+        print(f"  Episode {episode+1}/{n_episodes}: "
+              f"Prod={productivity:.1f}, Eq={equality:.3f}, Gini={gini_coeff:.3f}")
+
+        if episode == n_episodes - 1:
+            last_episode_tax_history = np.array(current_episode_taxes)
+        
+        print(f"  Episode {episode+1} Done.")
+    
+    # --- promedios finales ---
     mean_prod = float(np.mean(all_productivity))
     mean_eq = float(np.mean(all_equality))
     mean_gini = float(np.mean(all_gini))
