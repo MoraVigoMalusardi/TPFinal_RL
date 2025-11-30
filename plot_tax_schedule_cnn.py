@@ -408,7 +408,7 @@ def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
     plt.figure(figsize=(8, 5))
     plt.bar(indices, planner_rates, edgecolor='black', alpha=0.9)
     plt.xticks(indices, labels, rotation=30)
-    plt.ylim(0, 0.2)
+    plt.ylim(0, 0.025)
     plt.ylabel("Marginal Tax Rate")
     plt.xlabel("Income Brackets (Coins)")
     # plt.title("Planner Tax Schedule", fontweight="bold")
