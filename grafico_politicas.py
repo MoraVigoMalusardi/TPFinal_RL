@@ -526,14 +526,28 @@ def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
     labels = []
     prev_b = 0
     for b in brackets:
+        if b == 0:
+            continue  # saltar el 0 inicial
         labels.append(f"{prev_b}-{b}")
         prev_b = b
-    if len(labels) < n_brackets:
+    if len(labels) < len(planner_rates):
         labels.append(f"> {brackets[-1]}")
 
     if len(labels) != n_brackets:
         # fallback de seguridad
         labels = [f"B{i}" for i in range(n_brackets)]
+
+
+    labels = []
+    prev_b = 0
+    for b in brackets:
+        if b == 0:
+            continue  # saltar el 0 inicial
+        labels.append(f"{prev_b}-{b}")
+        prev_b = b
+    if len(labels) < len(planner_rates):
+        labels.append(f"> {brackets[-1]}")
+
 
     plt.figure(figsize=(8, 5))
     plt.bar(indices, planner_rates, edgecolor='black', alpha=0.9)
