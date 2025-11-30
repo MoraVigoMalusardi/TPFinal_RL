@@ -416,24 +416,29 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     last_episode_tax_history = [] 
     brackets = [] 
 
+    # --- NUEVO: listas para métricas ---
+    all_productivity = []
+    all_equality = []
+    all_gini = []
+
     # -----------------------------------------------------------
-    # 1. TU CÓDIGO: DETECCIÓN ROBUSTA DE BRACKETS
+    # 1. DETECCIÓN DE BRACKETS
     # -----------------------------------------------------------
     tax_component = None
     for comp in env_obj.env.components:
         if "Tax" in str(type(comp)):
             tax_component = comp
-            # Intentar sacar brackets
             if hasattr(comp, 'bracket_cutoffs'):
                 brackets = comp.bracket_cutoffs
             elif hasattr(comp, 'brackets'):
                 brackets = comp.brackets
             break
             
-    if len(brackets) == 0: brackets = [10, 50, 100, 500, 1000, 2000, 5000]
+    if len(brackets) == 0:
+        brackets = [10, 50, 100, 500, 1000, 2000, 5000]
     
-    # Convertir a lista de python normal si es numpy
-    if hasattr(brackets, 'tolist'): brackets = brackets.tolist()
+    if hasattr(brackets, 'tolist'):
+        brackets = brackets.tolist()
     
     print(f"Componente Fiscal: {type(tax_component).__name__}")
     print(f"Brackets detectados: {brackets}")
@@ -445,8 +450,9 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
         step = 0
         current_episode_taxes = []
         
-        # Buffer para guardar la última decisión del planner
-        # Inicializamos en 0 con el tamaño de los brackets detectados
+        # para métricas de este episodio
+        initial_coins = [agent.total_endowment('Coin') for agent in env_obj.env.world.agents]
+
         last_planner_action_rates = np.zeros(len(brackets))
 
         while not done["__all__"] and step < max_steps:
@@ -454,7 +460,6 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
             for agent_id, ob in obs.items():
                 policy_id = "a" if str(agent_id).isdigit() else "p"
                 
-                # Usamos explore=False para ver la política real
                 if trainer:
                     action = trainer.compute_action(ob, policy_id=policy_id, explore=False)
                 else:
@@ -462,46 +467,68 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                 
                 actions[agent_id] = action
 
-                # -----------------------------------------------------------
-                # 2. MI LÓGICA: CAPTURAR LA ACCIÓN (para que no salga en 0)
-                # -----------------------------------------------------------
                 if policy_id == "p":
-                    # El espacio es MultiDiscrete(22) -> Indices 0 a 21
                     MAX_INDICE = 21.0
                     
                     if hasattr(action, '__iter__'):
-                        # Convertimos índice a porcentaje (ej: Indice 21 -> 100%)
                         rates = np.array(action) / MAX_INDICE
-                        
-                        # Guardamos si coincide el tamaño
-                        # (A veces la acción tiene un elemento más o menos que los brackets, ajustamos)
                         if len(rates) == len(brackets):
                             last_planner_action_rates = rates
                         elif len(rates) > len(brackets):
                             last_planner_action_rates = rates[:len(brackets)]
                         else:
-                            # Relleno si falta
                             last_planner_action_rates[:len(rates)] = rates
-                # -----------------------------------------------------------
 
             obs, rew, done, info = env_obj.step(actions)    
-            
-            # Guardamos la tasa calculada desde la acción
             current_episode_taxes.append(last_planner_action_rates)
             step += 1
         
+        # --- NUEVO: métricas del episodio ---
+        final_coins = np.array([
+            agent.total_endowment('Coin')
+            for agent in env_obj.env.world.agents
+        ])
+
+        productivity = final_coins.sum()
+        gini_coeff = gini(final_coins)
+        n_agents = len(final_coins)
+        equality = 1 - (n_agents / (n_agents - 1)) * gini_coeff if n_agents > 1 else 1.0
+
+        all_productivity.append(productivity)
+        all_gini.append(gini_coeff)
+        all_equality.append(equality)
+
+        print(f"  Episode {episode+1}/{n_episodes}: "
+              f"Prod={productivity:.1f}, Eq={equality:.3f}, Gini={gini_coeff:.3f}")
+
         if episode == n_episodes - 1:
             last_episode_tax_history = np.array(current_episode_taxes)
         
         print(f"  Episode {episode+1} Done.")
     
+    # --- NUEVO: promedios finales ---
+    mean_prod = float(np.mean(all_productivity))
+    mean_eq = float(np.mean(all_equality))
+    mean_gini = float(np.mean(all_gini))
+
+    print("\nResultados promediados en modo híbrido:")
+    print(f"  Productivity: {mean_prod:.1f}")
+    print(f"  Equality   : {mean_eq:.3f}")
+    print(f"  Gini       : {mean_gini:.3f}")
+    print(f"  Eq x Prod  : {mean_eq * mean_prod:.1f}")
+
     results = {
         'policy_name': policy_name,
         'tax_history': last_episode_tax_history,
         'brackets': brackets,
+        'productivity': mean_prod,
+        'equality': mean_eq,
+        'gini': mean_gini,
+        'eq_times_prod': mean_eq * mean_prod,
     }
     
     return results
+
 
 def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
     tax_history = results.get('tax_history', [])
@@ -606,6 +633,8 @@ if __name__ == "__main__":
     plot_planner_schedule(results_ai_economist, save_path="planner_tax_schedule.png")
     
     ai_trainer.stop()
+    del ai_trainer
+    del env_obj
     ray.shutdown()
 
 
