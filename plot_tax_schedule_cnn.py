@@ -216,9 +216,8 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     all_productivity = []
     all_equality = []
     all_gini = []
-
     # -----------------------------------------------------------
-    # 1. DETECCIÓN DE BRACKETS (usar env_core)
+    # DETECCIÓN DE BRACKETS
     # -----------------------------------------------------------
     tax_component = None
     if hasattr(env_core, "components"):
@@ -230,17 +229,23 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                 elif hasattr(comp, 'brackets'):
                     brackets = comp.brackets
                 break
-            
+
     if len(brackets) == 0:
         brackets = [10, 50, 100, 500, 1000, 2000, 5000]
-    
+
     if hasattr(brackets, 'tolist'):
         brackets = brackets.tolist()
-    
-    print(f"Componente Fiscal: {type(tax_component).__name__ if tax_component is not None else 'None'}")
+
+    print(f"Componente Fiscal: {type(tax_component).__name__ if tax_component else 'None'}")
     print(f"Brackets detectados: {brackets}")
 
+    # 🔹 inicializar con tasas actuales si existen
+    if tax_component is not None and hasattr(tax_component, "curr_rates"):
+        default_rates = np.array(tax_component.curr_rates, dtype=float)
+    else:
+        default_rates = np.zeros(len(brackets))
     # -----------------------------------------------------------
+
     for episode in range(n_episodes):
         obs = env_obj.reset()
         done = {"__all__": False}
@@ -250,7 +255,7 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
         # para métricas de este episodio: usar env_core.world.agents
         initial_coins = [agent.total_endowment('Coin') for agent in env_core.world.agents]
 
-        last_planner_action_rates = np.zeros(len(brackets))
+        last_planner_action_rates = default_rates.copy()
 
         while not done["__all__"] and step < max_steps:
             actions = {}
@@ -265,7 +270,7 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                 actions[agent_id] = action
 
                 if policy_id == "p":
-                    ACTION_LEVELS = np.linspace(0.0, 1.0, 21)  # [0.00, 0.05, ..., 1.00]
+                    ACTION_LEVELS = np.linspace(0.0, 1.0, 21)
 
                     if hasattr(action, '__iter__'):
                         new_rates = []
@@ -280,12 +285,28 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
 
                         rates = np.array(new_rates, dtype=float)
 
-                        if len(rates) == len(brackets):
-                            last_planner_action_rates = rates
-                        elif len(rates) > len(brackets):
-                            last_planner_action_rates = rates[:len(brackets)]
+                    else:
+                        # Por si fuera un escalar (por las dudas)
+                        idx = int(action)
+                        if idx == 21:
+                            rates = last_planner_action_rates.copy()
                         else:
-                            last_planner_action_rates[:len(rates)] = rates
+                            rates = np.full_like(last_planner_action_rates,
+                                                ACTION_LEVELS[idx], dtype=float)
+
+                    # DEBUG cada 100 pasos
+                    if step % 100 == 0:
+                        print(f"[DEBUG] step {step} planner action: {action}")
+                        print(f"[DEBUG] step {step} mapped rates: {rates}")
+
+                    # Actualizar buffer
+                    if len(rates) == len(brackets):
+                        last_planner_action_rates = rates
+                    elif len(rates) > len(brackets):
+                        last_planner_action_rates = rates[:len(brackets)]
+                    else:
+                        last_planner_action_rates[:len(rates)] = rates
+
 
             obs, rew, done, info = env_obj.step(actions)    
             current_episode_taxes.append(last_planner_action_rates)
