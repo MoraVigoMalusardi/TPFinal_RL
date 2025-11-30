@@ -589,7 +589,7 @@ if __name__ == "__main__":
     #print("\n Resultados guardados en: policy_comparison_results.csv")
     ray.init(ignore_reinit_error=True, log_to_driver=False)
 
-    config = 'phase_ai_econ_eval/config.yaml'  #ACA VA LA CONFIG DE EVALUACION DE AI ECONOMIST
+    config = 'phase_aiecon_eval/config.yaml'  #ACA VA LA CONFIG DE EVALUACION DE AI ECONOMIST
     agents = 'checkpoints/nuevo_sin_lstm/policy_a_weights_w_planner.pt' #ACA VA EL CHECKPOINT DE LOS AGENTES DE AI ECONOMIST (WITH PLANNER)
     planner = 'checkpoints/nuevo_sin_lstm/policy_p_weights_w_planner.pt' #ACA VA EL CHECKPOINT DEL PLANNER DE AI ECONOMIST (WITH PLANNER)
 
