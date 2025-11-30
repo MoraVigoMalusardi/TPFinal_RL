@@ -514,10 +514,10 @@ def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
     tax_history = np.asarray(tax_history)
 
     # Opción 1: usar la última acción del planner
-    planner_rates = tax_history[-1]          # shape: [n_brackets]
+    # planner_rates = tax_history[-1]          # shape: [n_brackets]
 
     # Opción 2 (alternativa): promedio a lo largo del episodio
-    # planner_rates = tax_history.mean(axis=0)
+    planner_rates = tax_history.mean(axis=0)
 
     n_brackets = len(planner_rates)
     indices = np.arange(n_brackets)
