@@ -627,7 +627,7 @@ if __name__ == "__main__":
         config,
         'AI Economist',
         trainer=ai_trainer,
-        n_episodes=10
+        n_episodes=1
     )
     # plot_tax_comparison(results_ai_economist, output_dir=".")
     plot_planner_schedule(results_ai_economist, save_path="planner_tax_schedule.png")
