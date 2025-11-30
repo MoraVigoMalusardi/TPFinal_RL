@@ -503,6 +503,58 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     
     return results
 
+def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
+    tax_history = results.get('tax_history', [])
+    brackets = results.get('brackets', [])
+
+    if len(tax_history) == 0 or len(brackets) == 0:
+        print("⚠️ No hay datos suficientes para graficar la policy del planner.")
+        return
+
+    tax_history = np.asarray(tax_history)
+
+    # Opción 1: usar la última acción del planner
+    # planner_rates = tax_history[-1]          # shape: [n_brackets]
+
+    # Opción 2 (alternativa): promedio a lo largo del episodio
+    planner_rates = tax_history.mean(axis=0)
+
+    n_brackets = len(planner_rates)
+    indices = np.arange(n_brackets)
+
+    # Construir etiquetas de los intervalos, tipo "0-10", "10-50", ..., "> último"
+    labels = []
+    prev_b = 0
+    for b in brackets:
+        labels.append(f"{prev_b}-{b}")
+        prev_b = b
+    if len(labels) < n_brackets:
+        labels.append(f"> {brackets[-1]}")
+
+    if len(labels) != n_brackets:
+        # fallback de seguridad
+        labels = [f"B{i}" for i in range(n_brackets)]
+
+    plt.figure(figsize=(8, 5))
+    plt.bar(indices, planner_rates, edgecolor='black', alpha=0.9)
+    plt.xticks(indices, labels, rotation=30)
+    plt.ylim(0, 1.05)
+    plt.ylabel("Marginal Tax Rate")
+    plt.xlabel("Income Brackets (Coins)")
+    plt.title("Planner Tax Schedule", fontweight="bold")
+    plt.grid(axis='y', alpha=0.3)
+
+    # Mostrar el valor numérico arriba de cada barra
+    for x, y in zip(indices, planner_rates):
+        if y > 0.01:
+            plt.text(x, y + 0.02, f"{y:.2f}", ha='center', va='bottom', fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    print(f"[GRÁFICO] Planner tax schedule guardado en: {save_path}")
+    plt.close()
+
+
 if __name__ == "__main__":
     #results = compare_all_policies()
 
@@ -536,8 +588,10 @@ if __name__ == "__main__":
         trainer=ai_trainer,
         n_episodes=1
     )
-    plot_tax_comparison(results_ai_economist, output_dir=".")
+    # plot_tax_comparison(results_ai_economist, output_dir=".")
+    plot_planner_schedule(results_ai_economist, save_path="planner_tax_schedule.png")
     
     ai_trainer.stop()
     ray.shutdown()
+
 
