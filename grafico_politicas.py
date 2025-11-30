@@ -402,185 +402,7 @@ def plot_tax_comparison(ai_results, output_dir="."):
     print(f"\n[GRAFICO] Comparación de barras guardada en: {save_path}")
     plt.close()
 
-def evaluate_policy2(config_path, policy_name, trainer=None, max_steps=1000, n_episodes=5):
-    print(f"\n{'='*70}")
-    print(f"Evaluando: {policy_name} (MODO DEBUG VALORES)")
-    print(f"{'='*70}")
-    
-    with open(config_path, 'r') as f:
-        run_configuration = yaml.safe_load(f)
-    
-    env_config = build_env_config(run_configuration)
-    env_obj = create_env_for_inspection(env_config)
-    
-    last_episode_tax_history = [] 
-    brackets = [] 
-
-    # 1. ENCONTRAR EL COMPONENTE DE IMPUESTOS
-    tax_component = None
-    for comp in env_obj.env.components:
-        if "Tax" in str(type(comp)):
-            tax_component = comp
-            # Intentar sacar brackets
-            if hasattr(comp, 'bracket_cutoffs'):
-                brackets = comp.bracket_cutoffs
-            elif hasattr(comp, 'brackets'):
-                brackets = comp.brackets
-            break
-            
-    if len(brackets) == 0: brackets = [10, 50, 100, 500, 1000, 2000, 5000]
-    print(f"✅ Componente Fiscal: {type(tax_component).__name__}")
-    print(f"✅ Brackets: {brackets}")
-    
-    # Validar si encontramos running_avg
-    if tax_component and hasattr(tax_component, 'running_avg_tax_rates'):
-        print("✅ Atributo 'running_avg_tax_rates' detectado.")
-    else:
-        print("⚠️ 'running_avg_tax_rates' NO detectado, usaremos 'curr_bracket_tax_rates'.")
-
-    for episode in range(n_episodes):
-        obs = env_obj.reset()
-        done = {"__all__": False}
-        step = 0
-        current_episode_taxes = []
-
-        while not done["__all__"] and step < max_steps:
-            actions = {}
-            for agent_id, ob in obs.items():
-                policy_id = "a" if str(agent_id).isdigit() else "p"
-                if trainer:
-                    action = trainer.compute_action(ob, policy_id=policy_id, explore=False)
-                else:
-                    action = env_obj.action_space.sample()[agent_id]
-                actions[agent_id] = action
-
-            obs, rew, done, info = env_obj.step(actions)    
-            
-            # --- CAPTURAR TASAS ---
-            current_step_rates = np.zeros(len(brackets))
-            
-            if tax_component:
-                # ESTRATEGIA: Intentar leer el promedio acumulado primero (más estable)
-                if hasattr(tax_component, 'running_avg_tax_rates'):
-                     vals = tax_component.running_avg_tax_rates
-                     if isinstance(vals, (list, np.ndarray)) and np.sum(vals) > 0:
-                         current_step_rates = np.array(vals)
-                
-                # Si sigue siendo 0, intentar la tasa actual instantánea
-                if np.sum(current_step_rates) == 0:
-                    if hasattr(tax_component, 'curr_bracket_tax_rates'):
-                        vals = tax_component.curr_bracket_tax_rates
-                        if isinstance(vals, (list, np.ndarray)) and len(vals) > 0:
-                            current_step_rates = np.array(vals)
-            
-            # Asegurar longitud correcta
-            if len(current_step_rates) != len(brackets):
-                current_step_rates = np.resize(current_step_rates, len(brackets))
-
-            # --- DEBUGGING VISUAL ---
-            # Imprimir los valores reales en el paso 100 para ver qué está pasando
-            if episode == 0 and step == 100:
-                print(f"\n[PASO 100] Tasas detectadas: {current_step_rates}")
-                if np.sum(current_step_rates) == 0:
-                    print("⚠️ ALERTA: Las tasas son todo CEROS. El Planner está eligiendo 0% o no está actuando.")
-            # ------------------------
-
-            current_episode_taxes.append(current_step_rates)
-            step += 1
-        
-        if episode == n_episodes - 1:
-            last_episode_tax_history = np.array(current_episode_taxes)
-        
-        print(f"  Episode {episode+1} Done.")
-    
-    results = {
-        'policy_name': policy_name,
-        'tax_history': last_episode_tax_history,
-        'brackets': brackets,
-    }
-    
-    return results
-
-
-def evaluate_policy3(config_path, policy_name, trainer=None, max_steps=1000, n_episodes=5):
-    print(f"\n{'='*70}")
-    print(f"Evaluando: {policy_name} (MODO ACCIÓN DIRECTA)")
-    print(f"{'='*70}")
-    
-    with open(config_path, 'r') as f:
-        run_configuration = yaml.safe_load(f)
-    
-    env_config = build_env_config(run_configuration)
-    env_obj = create_env_for_inspection(env_config)
-    
-    last_episode_tax_history = [] 
-    brackets = [10, 50, 100, 500, 1000, 2000, 5000] # Default seguro
-
-    # Buscar brackets reales si existen
-    for comp in env_obj.env.components:
-        if hasattr(comp, 'brackets'):
-            brackets = comp.brackets
-            break
-      
-
-    for episode in range(n_episodes):
-        obs = env_obj.reset()
-        done = {"__all__": False}
-        step = 0
-        current_episode_taxes = []
-        
-        # Variable para recordar la última acción del planner
-        last_planner_action = np.zeros(len(brackets))
-
-        while not done["__all__"] and step < max_steps:
-            actions = {}
-            for agent_id, ob in obs.items():
-                policy_id = "a" if str(agent_id).isdigit() else "p"
-                
-                # --- AQUÍ CAPTURAMOS LA ACCIÓN ---
-                if trainer:
-                    # Usa explore=False para ver la política real aprendida
-                    action = trainer.compute_action(ob, policy_id=policy_id, explore=False)
-                else:
-                    action = env_obj.action_space.sample()[agent_id]
-                
-                actions[agent_id] = action
-
-                # Si es el planner, guardamos su decisión
-                if policy_id == "p":
-                    # La acción es un array de índices (ej: [0, 5, 21...])
-                    # Lo convertimos a Tasa % aproximada (Indice / Max_Indice)
-                    # El espacio es MultiDiscrete(22), así que dividimos por 21.0
-                    if hasattr(action, '__iter__'): 
-                        rates_from_action = np.array(action) / 21.0
-                        
-                        # Asegurar longitud
-                        if len(rates_from_action) == len(brackets):
-                            last_planner_action = rates_from_action
-            
-            obs, rew, done, info = env_obj.step(actions)    
-            
-            # --- C. GUARDAMOS LA ACCIÓN COMO TASA ---
-            # En lugar de leer el estado del env, usamos lo que decidió el cerebro
-            current_episode_taxes.append(last_planner_action)
-            # ----------------------------------------
-
-            step += 1
-        
-        if episode == n_episodes - 1:
-            last_episode_tax_history = np.array(current_episode_taxes)
-        
-        print(f"  Episode {episode+1} Done.")
-    
-    results = {
-        'policy_name': policy_name,
-        'tax_history': last_episode_tax_history,
-        'brackets': brackets,
-    }
-    
-    return results
-
-def evaluate_policy4(config_path, policy_name, trainer=None, max_steps=1000, n_episodes=5):
+def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_episodes=5):
     print(f"\n{'='*70}")
     print(f"Evaluando: {policy_name} (MODO HÍBRIDO: Brackets Auto + Acción Directa)")
     print(f"{'='*70}")
@@ -613,8 +435,8 @@ def evaluate_policy4(config_path, policy_name, trainer=None, max_steps=1000, n_e
     # Convertir a lista de python normal si es numpy
     if hasattr(brackets, 'tolist'): brackets = brackets.tolist()
     
-    print(f"✅ Componente Fiscal: {type(tax_component).__name__}")
-    print(f"✅ Brackets detectados: {brackets}")
+    print(f"Componente Fiscal: {type(tax_component).__name__}")
+    print(f"Brackets detectados: {brackets}")
     # -----------------------------------------------------------
 
     for episode in range(n_episodes):
@@ -708,7 +530,7 @@ if __name__ == "__main__":
     ai_trainer.get_policy("p").model.load_state_dict(planner_weights)
     print(" Pesos cargados")
     
-    results_ai_economist = evaluate_policy4(
+    results_ai_economist = evaluate_policy(
         config,
         'AI Economist',
         trainer=ai_trainer,
