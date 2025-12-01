@@ -1,9 +1,5 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import argparse
 from pathlib import Path
-
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -50,12 +46,10 @@ def main():
     for csv_path, label in zip(csv_paths, labels):
         df = pd.read_csv(csv_path)
 
-        # Asegurar numérico
         for col in ["timesteps_total", "policy_a_reward_mean"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        # Eje X
         if "timesteps_total" in df.columns and df["timesteps_total"].notna().any():
             x = df["timesteps_total"]
         else:
@@ -68,7 +62,7 @@ def main():
         y = df["policy_a_reward_mean"]
         plt.plot(x, y, linewidth=1.5, label=label)
 
-    plt.title("Policy a - mean reward vs timesteps")
+    # plt.title("Policy a - mean reward vs timesteps")
     plt.xlabel("timesteps")
     plt.ylabel("Mean reward (policy a)")
     plt.grid(True, linestyle="--", alpha=0.4)

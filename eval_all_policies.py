@@ -43,16 +43,12 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     print(f"Evaluando: {policy_name}")
     print(f"{'='*70}")
     
-    # Cargar configuración
     with open(config_path, 'r') as f:
         run_configuration = yaml.safe_load(f)
     
-    # Crear entorno
     env_config = build_env_config(run_configuration)
     env_obj = create_env_for_inspection(env_config)
     
-
-    # Ejecutar múltiples episodios
     all_productivity = []
     all_equality = []
     all_gini = []
@@ -72,7 +68,6 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                 action = trainer.compute_action(ob, policy_id=policy_id)
                 actions[agent_id] = action
 
-                #cada 100 pasos imprimo la accion tomada por cada agente
                 if step % 100 == 0:
                     print(f"    Agent {agent_id} took action {action}")
             
@@ -87,7 +82,6 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                 print(f"    Total change: {[f'{c:+.1f}' for c in coin_changes]}")
             step += 1
         
-        # Calcular métricas finales del episodio
         final_coins = np.array([
             agent.total_endowment('Coin') 
             for agent in env_obj.env.world.agents
@@ -105,7 +99,6 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
         print(f"  Episode {episode+1}/{n_episodes}: "
               f"Prod={productivity:.1f}, Eq={equality:.3f}, Gini={gini_coeff:.3f}")
     
-    # Promediar resultados
     results = {
         'policy_name': policy_name,
         'productivity': np.mean(all_productivity),
@@ -133,7 +126,7 @@ def compare_all_policies():
     
     # 1. Free Market (sin impuestos)
 
-    config = 'configs_eval/free_market.yaml' #ACA VA LA CONFIG DE EVALUACION DE FREE MARKET
+    config = 'configs_eval/free_market.yaml'
     print("\n Cargando pesos del Free Market...")
     with open(config, 'r') as f:   
         free_config = yaml.safe_load(f)
@@ -144,7 +137,7 @@ def compare_all_policies():
     free_trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
     
     
-    agent_weights = torch.load('checkpoints/policy_a_weights.pt', map_location='cpu') #ACA VA EL CHECKPOINT DE FREE MARKET (LOS PRIMEROS AGENTES QUE ENTRENAMOS)
+    agent_weights = torch.load('checkpoints/policy_a_weights.pt', map_location='cpu')
     free_trainer.get_policy("a").model.load_state_dict(agent_weights)
     
 
@@ -161,7 +154,7 @@ def compare_all_policies():
     
     # 2. US Federal
 
-    config = 'configs_eval/us_fed.yaml'  #ACA VA LA CONFIG DE EVALUACION DE US FEDERAL
+    config = 'configs_eval/us_fed.yaml'  
 
     print("\n Cargando pesos del US Federal...")
     with open(config, 'r') as f:
@@ -189,7 +182,7 @@ def compare_all_policies():
     
     # 3. Saez Formula 
 
-    config = 'configs_eval/saez.yaml'  #ACA VA LA CONFIG DE EVALUACION DE SAEZ FORMULA
+    config = 'configs_eval/saez.yaml' 
 
     print("\n Cargando pesos de Saez Formula...")
     with open(config, 'r') as f:
@@ -216,9 +209,9 @@ def compare_all_policies():
 
     # 4. AI Economist (cargar pesos entrenados)
     print("\n Cargando pesos del AI Economist...")
-    config = 'configs_eval/ai.yaml'  #ACA VA LA CONFIG DE EVALUACION DE AI ECONOMIST
-    agents = 'checkpoints/policy_a_weights_w_planner.pt' #ACA VA EL CHECKPOINT DE LOS AGENTES DE AI ECONOMIST (WITH PLANNER)
-    planner = 'checkpoints/policy_p_weights_w_planner.pt' #ACA VA EL CHECKPOINT DEL PLANNER DE AI ECONOMIST (WITH PLANNER)
+    config = 'configs_eval/ai.yaml'  
+    agents = 'checkpoints/policy_a_weights_w_planner.pt' 
+    planner = 'checkpoints/policy_p_weights_w_planner.pt'
 
     with open(config, 'r') as f:
         ai_config = yaml.safe_load(f)
@@ -279,7 +272,6 @@ def plot_comparison(results_list, save_path='policy_comparison.png'):
     ax.set_title('Economic Productivity', fontsize=15, fontweight='bold')
     ax.grid(axis='y', alpha=0.3)
     
-    # Valores sobre barras
     for i, (bar, val) in enumerate(zip(bars, productivity_vals)):
         ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
                f'{int(val)}',
@@ -287,7 +279,7 @@ def plot_comparison(results_list, save_path='policy_comparison.png'):
     
     # Subplot 2: Equality
     ax = axes[1]
-    equality_vals = [r['equality'] * 100 for r in results_list]  # Como porcentaje
+    equality_vals = [r['equality'] * 100 for r in results_list] 
     equality_stds = [r['equality_std'] * 100 for r in results_list]
     bars = ax.bar(range(len(policies)), equality_vals, color=colors,
                   alpha=0.8, edgecolor='black', linewidth=1.5)
@@ -300,7 +292,6 @@ def plot_comparison(results_list, save_path='policy_comparison.png'):
     ax.set_ylim([0, 100])
     ax.grid(axis='y', alpha=0.3)
     
-    # Valores sobre barras
     for i, (bar, val) in enumerate(zip(bars, equality_vals)):
         ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
                f'{int(val)}%',
@@ -317,7 +308,6 @@ def plot_comparison(results_list, save_path='policy_comparison.png'):
     ax.set_title('Equality x Productivity', fontsize=15, fontweight='bold')
     ax.grid(axis='y', alpha=0.3)
     
-    # Valores sobre barras
     for i, (bar, val) in enumerate(zip(bars, eq_prod_vals)):
         ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
                f'{int(val)}',

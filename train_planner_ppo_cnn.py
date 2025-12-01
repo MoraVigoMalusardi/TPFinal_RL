@@ -10,7 +10,6 @@ import warnings
 import gym
 import numpy as np
 import torch.nn as nn
-
 from ray.tune.logger import UnifiedLogger
 from ray.rllib.agents.ppo import PPOTrainer
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
@@ -54,7 +53,6 @@ class SafeEnvWrapper(MultiAgentEnv):
         self.observation_space = self.internal_env.observation_space
         self.action_space = self.internal_env.action_space
         
-        # Limpieza del espacio del Planner (eliminar p0, p1...)
         orig_pl_space = self.internal_env.observation_space_pl
         if hasattr(orig_pl_space, "spaces"):
             new_spaces = {
@@ -76,7 +74,6 @@ class SafeEnvWrapper(MultiAgentEnv):
         return self._clean_obs(obs), rew, done, info
 
     def _clean_obs(self, obs):
-        # Limpiar observaciones del planner
         if 'p' in obs and isinstance(obs['p'], dict):
             keys_to_remove = [k for k in obs['p'].keys() if k.startswith('p') and k[1:].isdigit()]
             for k in keys_to_remove:
@@ -99,7 +96,6 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
 
         self.spatial_key = "world-map"
         
-        # --- Detección de Inputs ---
         original_space = obs_space.original_space if hasattr(obs_space, "original_space") else obs_space
         spatial_shape = None
         flat_dim = 0
@@ -109,14 +105,13 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
                 if key == self.spatial_key:
                     spatial_shape = space.shape
                 elif key == "action_mask":
-                    # NO la metemos en el vector plano, se usa solo para enmascarar logits
                     continue
                 else:
                     flat_dim += int(np.prod(space.shape))
         else:
             flat_dim = int(np.prod(obs_space.shape))
 
-        # --- 1. Rama CNN (Visión) ---
+        # --- 1. Rama CNN ---
         if spatial_shape:
             in_channels = spatial_shape[0] if spatial_shape[0] < spatial_shape[2] else spatial_shape[2]
             
@@ -178,7 +173,6 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
         if self.cnn is not None:
             if isinstance(obs, dict) and self.spatial_key in obs:
                 map_input = obs[self.spatial_key].float()
-                # [B, H, W, C] -> [B, C, H, W] si hace falta
                 if map_input.shape[-1] < map_input.shape[1]:
                     map_input = map_input.permute(0, 3, 1, 2)
                 cnn_out = self.cnn(map_input)
@@ -218,7 +212,6 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
         critic_out = self.critic_layers(features)
         self._cur_value = self.value_head(critic_out).squeeze(1)
 
-        # Aplicar Action Mask si existe
         if isinstance(obs, dict) and "action_mask" in obs:
             inf_mask = torch.clamp(torch.log(obs["action_mask"]), min=-1e10)
             logits = logits + inf_mask
@@ -280,18 +273,14 @@ def process_args():
 def build_env_config(run_configuration):
     env_config = run_configuration.get("env", {}).copy()
     env_config.setdefault("scenario_name", "layout_from_file/simple_wood_and_stone")
-
-    # Importante para CNN:
     env_config["flatten_observations"] = False
     env_config["flatten_masks"] = True
-
     logger.info(f"Env Config - Scenario: {env_config['scenario_name']}")
     logger.info("Flatten Observations set to FALSE for CNN compatibility.")
     return env_config
 
 
 def create_env_for_inspection(env_config):
-    # Usamos SafeEnvWrapper también para inspección
     return SafeEnvWrapper({"env_config_dict": env_config}, verbose=True)
 
 
@@ -303,11 +292,8 @@ def build_multiagent_policies(env_obj, run_configuration):
     general_config = run_configuration.get("general", {})
     agent_policy_config = run_configuration.get("agent_policy", {})
     planner_policy_config = run_configuration.get("planner_policy", {})
-
-    # En fase 2 queremos entrenar planner y agentes => True
     train_planner = general_config.get("train_planner", True)
 
-    # Modelo CNN para agentes
     agent_model = {
         "custom_model": "paper_cnn_torch",
         "custom_model_config": {},
@@ -315,7 +301,6 @@ def build_multiagent_policies(env_obj, run_configuration):
         "vf_share_layers": False,
     }
 
-    # Modelo CNN para planner
     planner_model = {
         "custom_model": "paper_cnn_torch",
         "custom_model_config": {},
@@ -364,10 +349,8 @@ def build_multiagent_policies(env_obj, run_configuration):
     }
 
     def policy_mapping_fn(agent_id):
-        # IDs numéricos -> "a", planner -> "p"
         return "a" if str(agent_id).isdigit() else "p"
 
-    # Si train_planner=True, entrenamos ambos ("p" y "a")
     policies_to_train = ["p", "a"] if train_planner else ["a"]
 
     logger.info(f"Políticas configuradas - Train planner: {train_planner}")
@@ -487,7 +470,6 @@ def train(trainer, num_iters=5, planner=True):
     # ---- Guardar pesos al final (state_dicts) ----
     os.makedirs("checkpoints", exist_ok=True)
     os.makedirs("checkpoints/nuevo_cnn_planner", exist_ok=True)
-
     if planner:
         torch.save(
             trainer.get_policy("a").model.state_dict(),
@@ -532,7 +514,6 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
         actions = {}
         for agent_id, ob in obs.items():
             policy_id = "a" if str(agent_id).isdigit() else "p"
-            # Sin LSTM, state vacío
             action, _, _ = trainer.compute_action(
                 ob,
                 state=[],
@@ -595,7 +576,6 @@ def main(planner=True):
     ray.init(include_dashboard=False, log_to_driver=False)
     logger_creator = create_tb_logger_creator(run_dir)
 
-    # Registrar modelo CNN
     ModelCatalog.register_custom_model("paper_cnn_torch", AI_Economist_CNN_PyTorch)
     logger.info("Modelo Custom 'paper_cnn_torch' registrado.")
 
@@ -610,17 +590,14 @@ def main(planner=True):
     general_cfg = run_configuration.get("general", {})
     train_planner_flag = general_cfg.get("train_planner", True)
 
-    # A) Si hay checkpoint completo, reanudar desde ahí
     if restore_checkpoint is not None and os.path.exists(restore_checkpoint):
         logger.info(f"Restaurando trainer desde checkpoint: {restore_checkpoint}")
         trainer.restore(restore_checkpoint)
 
     else:
-        # B) Si NO hay checkpoint, arrancar Fase 2 cargando pesos previos
         restore_agents_path = general_cfg.get("restore_tf_weights_agents", "")
         restore_planner_path = general_cfg.get("restore_tf_weights_planner", "")
 
-        # Cargar pesos de agentes entrenados en Fase 1 (CNN)
         if restore_agents_path and os.path.exists(restore_agents_path):
             logger.info(f"Cargando pesos pre-entrenados de agentes desde: {restore_agents_path}")
             try:
@@ -637,7 +614,6 @@ def main(planner=True):
                 logger.warning("Fase 2 activada (train_planner=True) pero no se encontraron pesos de agentes.")
                 logger.warning(f"  Path de agentes especificado: {restore_agents_path}")
 
-        # Cargar pesos previos del planner (opcional)
         if restore_planner_path and os.path.exists(restore_planner_path):
             logger.info(f"Cargando pesos pre-entrenados de planner desde: {restore_planner_path}")
             try:
@@ -648,19 +624,16 @@ def main(planner=True):
                 logger.error(f"Error al cargar pesos de planner: {e}")
                 logger.warning("Continuando con pesos aleatorios para planner.")
 
-    # ---- Entrenamiento ----
     num_iterations = general_cfg.get("num_iterations", 100)
     logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
 
     history, last_checkpoint = train(trainer, num_iters=num_iterations, planner=planner)
     logger.info(f"Último checkpoint RLlib (planner+agentes CNN): {last_checkpoint}")
 
-    # Guardar historial
     os.makedirs("nuevo_cnn_planner", exist_ok=True)
     csv_path = "nuevo_cnn_planner/ppo_results_with_planner_cnn.csv"
     save_history_to_csv(history, csv_path)
 
-    # Evaluación
     logger.info("\nEjecutando episodio de evaluación...")
     episode_length = env_config.get("episode_length", 1000)
     run_eval_episode(trainer, env_obj, max_steps=episode_length)

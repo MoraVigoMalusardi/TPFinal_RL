@@ -147,23 +147,19 @@ def build_multiagent_policies(env_obj, run_configuration):
     general_config = run_configuration.get("general", {})
     agent_policy_config = run_configuration.get("agent_policy", {})
     planner_policy_config = run_configuration.get("planner_policy", {})
-
-    # En fase 2 queremos que esto sea True para entrenar solo el planner
     train_planner = general_config.get("train_planner", True)
 
-    # Modelo para agentes
     agent_model_cfg = agent_policy_config.get("model", {})
     agent_model = {
-        "fcnet_hiddens": agent_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_hiddens": agent_model_cfg.get("fcnet_hiddens", [256, 256]),  
         "fcnet_activation": agent_model_cfg.get("fcnet_activation", "tanh"),
         "use_lstm": agent_model_cfg.get("use_lstm", False), 
         "vf_share_layers": agent_model_cfg.get("vf_share_layers", False),
     }
 
-    # Modelo para planner
     planner_model_cfg = planner_policy_config.get("model", {})
     planner_model = {
-        "fcnet_hiddens": planner_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_hiddens": planner_model_cfg.get("fcnet_hiddens", [256, 256]), 
         "fcnet_activation": planner_model_cfg.get("fcnet_activation", "tanh"),
         "use_lstm": planner_model_cfg.get("use_lstm", False), 
         "vf_share_layers": planner_model_cfg.get("vf_share_layers", False),
@@ -217,7 +213,6 @@ def build_multiagent_policies(env_obj, run_configuration):
         """
         return "a" if str(agent_id).isdigit() else "p"
 
-    # En Fase 2 queremos entrenar SOLO el planner, si train_planner=True
     policies_to_train = ["p", "a"] if train_planner else ["a"]
 
     logger.info(f"Políticas configuradas - Train planner: {train_planner}")
@@ -312,7 +307,6 @@ def train(trainer, num_iters=5, planner=True):
         print(f"\n********** Iteración: {it} **********")
         result = trainer.train()
 
-        # Métricas globales
         episode_reward_mean = result.get("episode_reward_mean")
         episode_reward_min = result.get("episode_reward_min")
         episode_reward_max = result.get("episode_reward_max")
@@ -322,7 +316,6 @@ def train(trainer, num_iters=5, planner=True):
         timesteps_total = result.get("timesteps_total")
         training_iteration = result.get("training_iteration")
 
-        # Métricas por política
         policy_reward_mean = result.get("policy_reward_mean", {})
         policy_reward_min = result.get("policy_reward_min", {})
         policy_reward_max = result.get("policy_reward_max", {})
@@ -361,7 +354,6 @@ def train(trainer, num_iters=5, planner=True):
     # ---- Guardar pesos al final (state_dicts) ----
     os.makedirs("checkpoints", exist_ok=True)
     os.makedirs("checkpoints/nuevo_sin_lstm", exist_ok=True)
-
     if planner:
         torch.save(
             trainer.get_policy("a").model.state_dict(),
@@ -503,23 +495,12 @@ def main(planner=True):
 
     general_cfg = run_configuration.get("general", {})
     train_planner_flag = general_cfg.get("train_planner", True)
-
-    # ----------------------------------------------------------------
-    #  A) Si hay checkpoint completo, reanudar desde ahí
-    # ----------------------------------------------------------------
     if restore_checkpoint is not None and os.path.exists(restore_checkpoint):
         logger.info(f"Restaurando trainer (planner) desde checkpoint: {restore_checkpoint}")
         trainer.restore(restore_checkpoint)
-
     else:
-        # ----------------------------------------------------------------
-        #  B) Si NO hay checkpoint, arrancar Fase 2 "normal":
-        #     cargar pesos Fase 1 para agentes (y planner opcional).
-        # ----------------------------------------------------------------
         restore_agents_path = general_cfg.get("restore_tf_weights_agents", "")
         restore_planner_path = general_cfg.get("restore_tf_weights_planner", "")
-
-        # Cargar pesos de agentes entrenados en Fase 1
         if restore_agents_path and os.path.exists(restore_agents_path):
             logger.info(f"Cargando pesos pre-entrenados de agentes desde: {restore_agents_path}")
             try:
@@ -535,8 +516,6 @@ def main(planner=True):
             if train_planner_flag:
                 logger.warning("Fase 2 activada (train_planner=True) pero no se encontraron pesos de agentes.")
                 logger.warning(f"  Path de agentes especificado: {restore_agents_path}")
-
-        # Cargar pesos previos del planner (opcional, solo la primera vez)
         if restore_planner_path and os.path.exists(restore_planner_path):
             logger.info(f"Cargando pesos pre-entrenados de planner desde: {restore_planner_path}")
             try:
@@ -547,19 +526,16 @@ def main(planner=True):
                 logger.error(f"Error al cargar pesos de planner: {e}")
                 logger.warning("Continuando con pesos aleatorios para planner.")
 
-    # ---- Entrenamiento ----
     num_iterations = general_cfg.get("num_iterations", 100)
     logger.info(f"Comenzando entrenamiento por {num_iterations} iteraciones...")
 
     history, last_checkpoint = train(trainer, num_iters=num_iterations, planner=planner)
     logger.info(f"Último checkpoint RLlib (planner): {last_checkpoint}")
 
-    # Guardar historial
     os.makedirs("nuevo_sin_lstm", exist_ok=True)
     csv_path = "nuevo_sin_lstm/ppo_results_with_planner.csv"
     save_history_to_csv(history, csv_path)
 
-    # Evaluación
     logger.info("\nEjecutando episodio de evaluación...")
     episode_length = env_config.get("episode_length", 1000)
     run_eval_episode(trainer, env_obj, max_steps=episode_length)

@@ -17,7 +17,6 @@ from ray.rllib.env.multi_agent_env import MultiAgentEnv
 from ray.rllib.models import ModelCatalog
 from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
 from ray.rllib.utils.annotations import override
-
 from tutorials.rllib.env_wrapper import RLlibEnvWrapper
 
 # -------------------------------------------------------------------
@@ -32,7 +31,6 @@ logging.basicConfig(stream=sys.stdout, format="%(asctime)s %(message)s")
 logger = logging.getLogger("train_agents")
 logger.setLevel(logging.INFO)
 
-# Silenciar logs ruidosos
 logging.getLogger("ray").setLevel(logging.ERROR)
 logging.getLogger("ray.rllib").setLevel(logging.ERROR)
 logging.getLogger("ray.tune").setLevel(logging.ERROR)
@@ -55,7 +53,6 @@ class SafeEnvWrapper(MultiAgentEnv):
         self.observation_space = self.internal_env.observation_space
         self.action_space = self.internal_env.action_space
         
-        # Limpieza del espacio del Planner (eliminar p0, p1...)
         orig_pl_space = self.internal_env.observation_space_pl
         if hasattr(orig_pl_space, "spaces"):
             new_spaces = {
@@ -77,13 +74,11 @@ class SafeEnvWrapper(MultiAgentEnv):
         return self._clean_obs(obs), rew, done, info
 
     def _clean_obs(self, obs):
-        # Limpiar observaciones del planner
         if 'p' in obs and isinstance(obs['p'], dict):
             keys_to_remove = [k for k in obs['p'].keys() if k.startswith('p') and k[1:].isdigit()]
             for k in keys_to_remove:
                 del obs['p'][k]
         return obs
-
 
 # -------------------------------------------------------------------
 # 2) Modelo Híbrido: CNN (Mapa) + MLP (Stats)
@@ -103,7 +98,6 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
 
         self.spatial_key = "world-map"
         
-        # --- Detección de Inputs ---
         original_space = obs_space.original_space if hasattr(obs_space, "original_space") else obs_space
         spatial_shape = None
         flat_dim = 0
@@ -112,33 +106,27 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
             for key, space in original_space.spaces.items():
                 if key == self.spatial_key:
                     spatial_shape = space.shape
-                # --- CORRECCIÓN AQUÍ ---
-                # Debemos ignorar action_mask al calcular el tamaño de entrada de la MLP
-                # porque en el forward no se lo pasamos a la red.
                 elif key == "action_mask":
                     continue 
-                # -----------------------
                 else:
                     flat_dim += int(np.prod(space.shape))
         else:
             flat_dim = int(np.prod(obs_space.shape))
 
-        # --- 1. Rama CNN (Visión) - Stride 2 para velocidad ---
+        # --- 1. Rama CNN (Visión) - Stride 2 ---
         if spatial_shape:
-            # Detectar canales (usualmente 7)
             in_channels = spatial_shape[0] if spatial_shape[0] < spatial_shape[2] else spatial_shape[2]
             
             self.cnn = nn.Sequential(
-                # Capa 1: Stride 1 (Mantiene resolución)
+                # Capa 1: Stride 1 
                 nn.Conv2d(in_channels, 16, kernel_size=3, stride=1, padding=1),
                 nn.ReLU(),
-                # Capa 2: Stride 2 (Reduce a la mitad)
+                # Capa 2: Stride 2 
                 nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1), 
                 nn.ReLU(),
                 nn.Flatten()
             )
             
-            # Cálculo dinámico del tamaño de salida
             dummy_shape = (1, in_channels, spatial_shape[1], spatial_shape[2])
             dummy_input = torch.zeros(dummy_shape)
             with torch.no_grad():
@@ -150,7 +138,6 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
             cnn_out_dim = 0
 
         # --- 2. Rama Flat (Inventario) ---
-        # Usamos Tanh para ser consistentes con el baseline
         # flat_dim ahora valdrá 378 (sin la action mask)
         self.flat_processor = nn.Sequential(
             nn.Linear(flat_dim, flat_dim),
@@ -232,7 +219,6 @@ class AI_Economist_CNN_PyTorch(TorchModelV2, nn.Module):
         critic_out = self.critic_layers(features)
         self._cur_value = self.value_head(critic_out).squeeze(1)
 
-        # Aplicar Action Mask si existe
         if isinstance(obs, dict) and "action_mask" in obs:
              inf_mask = torch.clamp(torch.log(obs["action_mask"]), min=-1e10)
              logits = logits + inf_mask
@@ -273,10 +259,8 @@ def build_env_config(run_configuration):
     env_config = run_configuration.get("env", {}).copy()
     env_config.setdefault("scenario_name", "layout_from_file/simple_wood_and_stone")
 
-    # === CAMBIO CRÍTICO PARA CNN ===
-    # Desactivamos el aplanado para conservar la estructura 2D del mapa
     env_config["flatten_observations"] = False 
-    env_config["flatten_masks"] = True # Mantenemos máscaras planas para facilitar logits
+    env_config["flatten_masks"] = True 
     # ===============================
 
     logger.info(f"Env Config - Scenario: {env_config['scenario_name']}")
@@ -285,7 +269,6 @@ def build_env_config(run_configuration):
 
 
 def create_env_for_inspection(env_config):
-    # Usamos SafeEnvWrapper para inspección también
     return SafeEnvWrapper({"env_config_dict": env_config}, verbose=True)
 
 
@@ -300,16 +283,13 @@ def build_multiagent_policies(env_obj, run_configuration):
 
     train_planner = general_config.get("train_planner", False)
 
-    # Configuración del Modelo para Agentes
     agent_model = {
         "custom_model": "paper_cnn_torch", 
         "custom_model_config": {},
-        # Desactivamos LSTM nativa de RLlib para usar solo nuestra CNN+MLP
         "use_lstm": False, 
         "vf_share_layers": False,
     }
 
-    # Configuración del Modelo para Planner
     planner_model = {
         "custom_model": "paper_cnn_torch", 
         "custom_model_config": {},
@@ -317,11 +297,10 @@ def build_multiagent_policies(env_obj, run_configuration):
         "vf_share_layers": False,
     }
 
-    # Crear políticas
     policies = {
         "a": (
             None,
-            env_obj.observation_space, # Ahora es Dict Space (no plano)
+            env_obj.observation_space, 
             env_obj.action_space,
             {
                 "model": agent_model,
@@ -435,7 +414,6 @@ def train(trainer, num_iters=5):
 
         policy_reward_mean = result.get("policy_reward_mean", {})
         
-        # Extraemos métricas para el CSV
         a_mean = policy_reward_mean.get("a")
         p_mean = policy_reward_mean.get("p")
         
@@ -453,21 +431,16 @@ def train(trainer, num_iters=5):
         }
         history.append(row)
 
-    # ==== (RESTAURADO) Guardar pesos de policies (state_dict) ====
-    # Esto guarda solo los pesos de la red neuronal (CNN+MLP), sin el estado del optimizador
+    
     import torch
-
-    # Usamos una carpeta distinta para no mezclar con lo anterior
     os.makedirs("checkpoints/nuevo_cnn", exist_ok=True)
     
-    # Guardar Agente
     torch.save(
         trainer.get_policy("a").model.state_dict(),
         "checkpoints/nuevo_cnn/policy_a_cnn_weights.pt",
     )
     print("Pesos del Agente (CNN) guardados en checkpoints/nuevo_cnn/policy_a_cnn_weights.pt")
 
-    # Guardar Planner (si existe)
     if "p" in trainer.workers.local_worker().policy_map:
         torch.save(
             trainer.get_policy("p").model.state_dict(),
@@ -497,7 +470,6 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
         actions = {}
         for agent_id, ob in obs.items():
             policy_id = "a" if str(agent_id).isdigit() else "p"
-            # En CNN sin LSTM, state es una lista vacía y devuelve lista vacía
             action, _, _ = trainer.compute_action(
                 ob, 
                 state=[], 
@@ -523,24 +495,18 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
 def main():
     run_configuration, run_dir, restore_checkpoint = process_args()
     
-    # 1. Registrar el modelo CNN
     logger.info("Inicializando Ray...")
     ray.init(include_dashboard=False, log_to_driver=False)
     ModelCatalog.register_custom_model("paper_cnn_torch", AI_Economist_CNN_PyTorch)
     logger.info("Modelo Custom 'paper_cnn_torch' registrado.")
 
-    # 2. Configurar Entorno (FORZANDO FLATTEN=FALSE)
     env_config = build_env_config(run_configuration)
     
-    # 3. Crear entorno de inspección con SafeWrapper
     env_obj = create_env_for_inspection(env_config)
 
-    # 4. Crear Config del Trainer
     trainer_config = build_trainer_config(env_obj, run_configuration, env_config)
     logger_creator = create_tb_logger_creator(run_dir)
 
-    # 5. Instanciar Trainer
-    # OJO: Pasamos la clase SafeEnvWrapper, no RLlibEnvWrapper directo
     trainer = PPOTrainer(
         env=SafeEnvWrapper,
         config=trainer_config,
@@ -549,12 +515,10 @@ def main():
 
     print(f"\nTensorBoard logs se están guardando en: {trainer.logdir}\n")
 
-
     # =============================================
     if restore_checkpoint and os.path.exists(restore_checkpoint):
         trainer.restore(restore_checkpoint)
     
-    # Imprimir arquitectura
     print("\n" + "="*30)
     print("Arquitectura del Modelo Agente:")
     print(trainer.get_policy("a").model)
@@ -563,7 +527,6 @@ def main():
     num_iterations = run_configuration.get("general", {}).get("num_iterations", 100)
     history, last_ckpt = train(trainer, num_iters=num_iterations)
 
-    # Guardar CSV
     os.makedirs("nuevo_cnn", exist_ok=True)
     keys = history[0].keys()
     with open("nuevo_cnn/ppo_results_agents.csv", "w", newline="") as f:

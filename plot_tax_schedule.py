@@ -40,7 +40,6 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
     last_episode_tax_history = [] 
     brackets = [] 
 
-    # --- NUEVO: listas para métricas ---
     all_productivity = []
     all_equality = []
     all_gini = []
@@ -74,7 +73,6 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
         step = 0
         current_episode_taxes = []
         
-        # para métricas de este episodio
         initial_coins = [agent.total_endowment('Coin') for agent in env_obj.env.world.agents]
 
         last_planner_action_rates = np.zeros(len(brackets))
@@ -92,9 +90,7 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                 actions[agent_id] = action
 
                 if policy_id == "p":
-                    # Cada sub-acción es un índice en:
-                    # {0, 0.05, 0.10, ..., 1.0}  (21 valores) + NO-OP (índice 21)
-                    ACTION_LEVELS = np.linspace(0.0, 1.0, 21)  # [0.00, 0.05, ..., 1.00]
+                    ACTION_LEVELS = np.linspace(0.0, 1.0, 21) 
 
                     if hasattr(action, '__iter__'):
                         new_rates = []
@@ -103,15 +99,12 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                             idx = int(idx)
 
                             if idx == 21:
-                                # NO-OP: mantiene la tasa que ya tenía ese bracket
                                 new_rates.append(prev_rate)
                             else:
-                                # 0..20 -> 0, 0.05, 0.10, ..., 1.0
                                 new_rates.append(ACTION_LEVELS[idx])
 
                         rates = np.array(new_rates, dtype=float)
 
-                        # Guardamos el vector de tasas actual como "última decisión"
                         if len(rates) == len(brackets):
                             last_planner_action_rates = rates
                         elif len(rates) > len(brackets):
@@ -119,13 +112,10 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
                         else:
                             last_planner_action_rates[:len(rates)] = rates
 
-
-
             obs, rew, done, info = env_obj.step(actions)    
             current_episode_taxes.append(last_planner_action_rates)
             step += 1
         
-        # --- NUEVO: métricas del episodio ---
         final_coins = np.array([
             agent.total_endowment('Coin')
             for agent in env_obj.env.world.agents
@@ -148,7 +138,6 @@ def evaluate_policy(config_path, policy_name, trainer=None, max_steps=1000, n_ep
         
         print(f"  Episode {episode+1} Done.")
     
-    # --- NUEVO: promedios finales ---
     mean_prod = float(np.mean(all_productivity))
     mean_eq = float(np.mean(all_equality))
     mean_gini = float(np.mean(all_gini))
@@ -182,16 +171,11 @@ def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
 
     tax_history = np.asarray(tax_history)
 
-    # Opción 1: usar la última acción del planner
-    # planner_rates = tax_history[-1]          # shape: [n_brackets]
-
-    # Opción 2 (alternativa): promedio a lo largo del episodio
     planner_rates = tax_history.mean(axis=0)
 
     n_brackets = len(planner_rates)
     indices = np.arange(n_brackets)
 
-    # Construir etiquetas de los intervalos, tipo "0-10", "10-50", ..., "> último"
     labels = []
     prev_b = 0
     for b in brackets:
@@ -203,9 +187,7 @@ def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
         labels.append(f"> {brackets[-1]}")
 
     if len(labels) != n_brackets:
-        # fallback de seguridad
         labels = [f"B{i}" for i in range(n_brackets)]
-
 
     labels = []
     prev_b = 0
@@ -217,7 +199,6 @@ def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
     if len(labels) < len(planner_rates):
         labels.append(f"> {brackets[-1]}")
 
-
     plt.figure(figsize=(8, 5))
     plt.bar(indices, planner_rates, edgecolor='black', alpha=0.9)
     plt.xticks(indices, labels, rotation=30)
@@ -227,7 +208,6 @@ def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
     # plt.title("Planner Tax Schedule", fontweight="bold")
     plt.grid(axis='y', alpha=0.3)
 
-    # Mostrar el valor numérico arriba de cada barra
     for x, y in zip(indices, planner_rates):
         if y > 0.01:
             plt.text(x, y + 0.02, f"{y:.2f}", ha='center', va='bottom', fontsize=9)
@@ -239,16 +219,11 @@ def plot_planner_schedule(results, save_path="planner_tax_schedule.png"):
 
 
 if __name__ == "__main__":
-    #results = compare_all_policies()
-
-    #df = pd.DataFrame(results)
-    #df.to_csv('policy_comparison_results.csv', index=False)
-    #print("\n Resultados guardados en: policy_comparison_results.csv")
     ray.init(ignore_reinit_error=True, log_to_driver=False)
 
-    config = 'phase_aiecon_eval/config.yaml'  #ACA VA LA CONFIG DE EVALUACION DE AI ECONOMIST
-    agents = 'checkpoints/nuevo_sin_lstm/policy_a_weights_w_planner.pt' #ACA VA EL CHECKPOINT DE LOS AGENTES DE AI ECONOMIST (WITH PLANNER)
-    planner = 'checkpoints/nuevo_sin_lstm/policy_p_weights_w_planner.pt' #ACA VA EL CHECKPOINT DEL PLANNER DE AI ECONOMIST (WITH PLANNER)
+    config = 'phase_aiecon_eval/config.yaml'
+    agents = 'checkpoints/nuevo_sin_lstm/policy_a_weights_w_planner.pt' 
+    planner = 'checkpoints/nuevo_sin_lstm/policy_p_weights_w_planner.pt'
 
     with open(config, 'r') as f:
         ai_config = yaml.safe_load(f)
@@ -271,7 +246,6 @@ if __name__ == "__main__":
         trainer=ai_trainer,
         n_episodes=1
     )
-    # plot_tax_comparison(results_ai_economist, output_dir=".")
     plot_planner_schedule(results_ai_economist, save_path="planner_tax_schedule.png")
     
     ai_trainer.stop()

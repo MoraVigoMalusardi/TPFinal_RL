@@ -7,11 +7,9 @@ import yaml
 import ray
 import torch
 import pandas as pd
-
 from ray.rllib.agents.ppo import PPOTrainer
 from ray.rllib.models import ModelCatalog
 
-# === IMPORTS DE SCRIPTS DE ENTRENAMIENTO ===
 
 # MLP
 from train_planner_ppo import (
@@ -90,7 +88,6 @@ def build_ai_trainer_lstm(config_path, agents_ckpt, planner_ckpt):
     env_obj = create_env_for_inspection_lstm(env_config)
     trainer_config = build_trainer_config_lstm(env_obj, cfg, env_config)
 
-    # Registrar modelo custom LSTM (igual que en el main de train_planner_ppo_lstm_fc)
     ModelCatalog.register_custom_model("lstm_post_fc_256", CustomLSTMPostFC)
 
     trainer = PPOTrainer(env=RLlibEnvWrapper, config=trainer_config)
@@ -115,7 +112,6 @@ def build_ai_trainer_cnn(config_path, agents_ckpt, planner_ckpt):
     env_obj = create_env_for_inspection_cnn(env_config)
     trainer_config = build_trainer_config_cnn(env_obj, cfg, env_config)
 
-    # Registrar modelo custom CNN (igual que en train_planner_ppo_cnn)
     ModelCatalog.register_custom_model("paper_cnn_torch", AI_Economist_CNN_PyTorch)
 
     trainer = PPOTrainer(env=SafeEnvWrapper, config=trainer_config)
@@ -164,7 +160,6 @@ def evaluate_trainer_on_env(
     print(f"Evaluando: {policy_name}")
     print(f"{'='*70}")
 
-    # --- NUEVO: obtenemos el env base (AI-Economist) ---
     base_env = get_base_env(env_obj)
 
     all_productivity = []
@@ -176,7 +171,6 @@ def evaluate_trainer_on_env(
         done = {"__all__": False}
         step = 0
 
-        # Estados LSTM por agente+policy (solo si use_lstm=True)
         lstm_states = {}
         if use_lstm:
             for agent_id in obs.keys():
@@ -184,7 +178,6 @@ def evaluate_trainer_on_env(
                 init_state = trainer.get_policy(policy_id).get_initial_state()
                 lstm_states[(agent_id, policy_id)] = init_state
 
-        # --- CAMBIO: usamos base_env en vez de env_obj.env ---
         initial_coins = [agent.total_endowment('Coin') for agent in base_env.world.agents]
         print(f"\n  Initial coins: {[f'{c:.1f}' for c in initial_coins]}")
 
@@ -197,7 +190,6 @@ def evaluate_trainer_on_env(
                 if use_lstm:
                     key = (agent_id, policy_id)
                     state_in = lstm_states[key]
-                    # full_fetch=True para obtener nuevo estado
                     action, state_out, _ = trainer.compute_action(
                         ob,
                         state=state_in,
@@ -218,7 +210,6 @@ def evaluate_trainer_on_env(
             if step % 100 == 0:
                 print(f"    Step {step+1} done with rewards {rew}")
 
-                # --- CAMBIO: también acá usamos base_env ---
                 current_coins = [agent.total_endowment('Coin') for agent in base_env.world.agents]
                 print(f"    Current coins: {[f'{c:.1f}' for c in current_coins]}")
 
@@ -227,7 +218,6 @@ def evaluate_trainer_on_env(
 
             step += 1
 
-        # Métricas del episodio (otra vez base_env)
         final_coins = np.array([
             agent.total_endowment('Coin')
             for agent in base_env.world.agents
@@ -362,7 +352,7 @@ def plot_architectures_comparison(results_list, save_path='ai_econ_architectures
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     
     policies = [r['policy_name'] for r in results_list]
-    colors = ['#4EA8DE', '#C77DFF', '#06A77D']  # Blue, Purple, Teal
+    colors = ['#4EA8DE', '#C77DFF', '#06A77D']  
     
     # 1) Productivity
     ax = axes[0]

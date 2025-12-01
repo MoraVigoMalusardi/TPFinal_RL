@@ -18,10 +18,8 @@ def main():
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # --- Leer CSV ---
     df = pd.read_csv(args.csv)
 
-    # Asegurar tipos numéricos (por si hay 'None' o strings)
     numeric_cols = [
         "iteration", "timesteps_total", "episodes_total", "episodes_this_iter",
         "episode_reward_min", "episode_reward_max", "episode_reward_mean",
@@ -34,13 +32,11 @@ def main():
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # Eje X: iteración (si falta, usamos el índice + 1)
     if "iteration" in df.columns and df["iteration"].notna().any():
         x = df["iteration"]
     else:
         x = pd.Series(range(1, len(df) + 1), name="iteration")
 
-    # ===== 1) Policy reward mean vs iteración (a y p) =====
     fig1 = plt.figure(figsize=(8, 4.5))
     # a
     if "policy_a_reward_mean" in df.columns:
@@ -58,7 +54,6 @@ def main():
     fig1_path = outdir / "policy_rewards_mean_vs_iter.png"
     plt.savefig(fig1_path, dpi=200)
 
-    # ===== 2) KL vs iteración (a) =====
     if "kl_a" in df.columns:
         fig2 = plt.figure(figsize=(8, 4.5))
         plt.plot(x, df["kl_a"], marker="o", label="KL (a)")
@@ -71,7 +66,6 @@ def main():
         fig2_path = outdir / "kl_a_vs_iter.png"
         plt.savefig(fig2_path, dpi=200)
 
-    # ===== 3) Entropía de a vs iteración =====
     if "entropy_a" in df.columns:
         fig3 = plt.figure(figsize=(8, 4.5))
         plt.plot(x, df["entropy_a"], marker="o", label="Entropía (a)")
@@ -86,7 +80,6 @@ def main():
 
     if args.show:
         plt.show()
-
 
 if __name__ == "__main__":
     main()

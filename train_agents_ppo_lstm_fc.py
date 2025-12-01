@@ -84,7 +84,6 @@ def process_args():
         run_configuration["general"]["num_iterations"] = args.num_iters
         logger.info(f"Overriding general.num_iterations a {args.num_iters}")
 
-    # Devolvemos también el path del checkpoint (puede ser None)
     return run_configuration, args.run_dir, args.restore_checkpoint
 
 
@@ -141,10 +140,9 @@ class CustomLSTMPostFC(RecurrentNetwork, nn.Module):
         self.cell_size = model_config.get("lstm_cell_size", 128)
 
         # 1. ENCODER (Capas antes de la LSTM, simula fcnet_hiddens)
-        # Asumimos que la entrada se aplana automáticamente por RLlib
         input_dim = int(np.product(obs_space.shape))
         
-        # Dos capas de 256 como tenías en tu config original
+        # Dos capas de 256
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, 256),
             nn.Tanh(),
@@ -155,7 +153,7 @@ class CustomLSTMPostFC(RecurrentNetwork, nn.Module):
         # 2. LSTM
         self.lstm = nn.LSTM(256, self.cell_size, batch_first=True)
 
-        # 3. CAPA FC POST-LSTM (La que pediste)
+        # 3. CAPA FC POST-LSTM 
         self.post_lstm_fc = nn.Linear(self.cell_size, 256)
         self.activation = nn.Tanh()
 
@@ -169,13 +167,11 @@ class CustomLSTMPostFC(RecurrentNetwork, nn.Module):
 
     @override(RecurrentNetwork)
     def forward_rnn(self, inputs, state, seq_lens):
-        # inputs shape: [batch_size, seq_len, dim]
         
         # A. Pasar por el Encoder
         x = self.encoder(inputs)
 
         # B. Pasar por la LSTM
-        # state contiene [h, c]
         self._features, [h, c] = self.lstm(x, [torch.unsqueeze(state[0], 0), torch.unsqueeze(state[1], 0)])
         
         # C. Pasar por la FC de 256 POST-LSTM
@@ -190,7 +186,6 @@ class CustomLSTMPostFC(RecurrentNetwork, nn.Module):
 
     @override(RecurrentNetwork)
     def get_initial_state(self):
-        # RLlib se encarga de moverlo al dispositivo correcto (CPU/GPU) después.
         return [
             torch.zeros(self.cell_size),
             torch.zeros(self.cell_size)
@@ -235,14 +230,11 @@ def build_multiagent_policies(env_obj, run_configuration):
     agent_policy_config = run_configuration.get("agent_policy", {})
     planner_policy_config = run_configuration.get("planner_policy", {})
 
-    # En fase 1 lo natural es train_planner = False, solo se entrena "a"
     train_planner = general_config.get("train_planner", False)
 
-    # Modelo para agentes
     agent_model_cfg = agent_policy_config.get("model", {})
     
     agent_model = {
-        # Usamos el modelo custom, ignoramos fcnet_hiddens del default ya que lo definimos en la clase
         "custom_model": "lstm_post_fc_256", 
         "custom_model_config": {}, 
         "lstm_cell_size": agent_model_cfg.get("lstm_cell_size", 128),
@@ -250,7 +242,6 @@ def build_multiagent_policies(env_obj, run_configuration):
         "vf_share_layers": agent_model_cfg.get("vf_share_layers", False), 
     }
 
-    # Modelo para planner (en fase 1 típicamente no se usa/entrena)
     planner_model_cfg = planner_policy_config.get("model", {})
     planner_model = {
         "custom_model": "lstm_post_fc_256", 
@@ -307,7 +298,6 @@ def build_multiagent_policies(env_obj, run_configuration):
         """
         return "a" if str(agent_id).isdigit() else "p"
 
-    # En fase 1 queremos entrenar solo "a" (salvo que explícitamente se diga lo contrario)
     policies_to_train = ["a"] if not train_planner else ["a", "p"]
 
     logger.info(f"Políticas configuradas - Train planner: {train_planner}")
@@ -364,7 +354,6 @@ def build_trainer_config(env_obj, run_configuration, env_config):
         "no_done_at_end": trainer_yaml_config.get("no_done_at_end", False),
     }
 
-    # Config específico del wrapper de AI-Economist
     env_wrapper_config = {
         "env_config_dict": env_config,
         "num_envs_per_worker": trainer_config["num_envs_per_worker"],
@@ -454,22 +443,21 @@ def train(trainer, num_iters=5):
 
     # ==== Guardar pesos de policies (state_dict) ====
     import torch
-
     os.makedirs("checkpoints", exist_ok=True)
-    os.makedirs("checkpoints/nuevo_con_lstm", exist_ok=True)
+    os.makedirs("checkpoints/nuevo_con_lstm_fc", exist_ok=True)
     torch.save(
         trainer.get_policy("a").model.state_dict(),
-        "checkpoints/nuevo_con_lstm/policy_a_weights.pt",
+        "checkpoints/nuevo_con_lstm_fc/policy_a_weights.pt",
     )
 
     if "p" in trainer.workers.local_worker().policy_map:
         torch.save(
             trainer.get_policy("p").model.state_dict(),
-            "checkpoints/nuevo_con_lstm/policy_p_weights.pt",
+            "checkpoints/nuevo_con_lstm_fc/policy_p_weights.pt",
         )
 
     # ==== Guardar checkpoint completo de RLlib ====
-    checkpoint_root = os.path.join("checkpoints", "rllib_full")
+    checkpoint_root = os.path.join("checkpoints", "rllib_full_lstm_fc")
     os.makedirs(checkpoint_root, exist_ok=True)
     checkpoint_path = trainer.save(checkpoint_root)
     logger.info(f"Checkpoint RLlib completo guardado en: {checkpoint_path}")
@@ -486,9 +474,6 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
     done = {"__all__": False}
     total_rewards = {agent_id: 0.0 for agent_id in obs.keys()}
 
-    # 1. Inicializar estados de la LSTM para cada agente
-    # El estado inicial es una lista de listas: [[h, c]]
-    # cell_size debe coincidir con tu config (128)
     cell_size = 128 
     states = {
         agent_id: [np.zeros(cell_size, np.float32), np.zeros(cell_size, np.float32)]
@@ -501,16 +486,15 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
         for agent_id, ob in obs.items():
             policy_id = "a" if str(agent_id).isdigit() else "p"
             
-            # 2. Pasar el estado anterior y recibir el nuevo
             action, state_out, _info = trainer.compute_action(
                 ob, 
-                state=states[agent_id],  # Pasamos memoria actual
+                state=states[agent_id], 
                 policy_id=policy_id,
                 full_fetch=True
             )
             
             actions[agent_id] = action
-            states[agent_id] = state_out # Guardamos memoria nueva
+            states[agent_id] = state_out 
 
         obs, rew, done, _info = env_obj.step(actions)
 
@@ -584,7 +568,6 @@ def main():
     ModelCatalog.register_custom_model("lstm_post_fc_256", CustomLSTMPostFC)
     logger.info("Modelo Custom 'lstm_post_fc_256' registrado.")
 
-    # Logger de TensorBoard
     logger_creator = create_tb_logger_creator(run_dir)
 
     logger.info("Creando PPOTrainer (con TensorBoard)...")
@@ -596,7 +579,6 @@ def main():
 
     print(f"\nTensorBoard logs se están guardando en: {trainer.logdir}\n")
 
-    # ==== RESTAURAR CHECKPOINT COMPLETO (OPCIONAL) ====
     if restore_checkpoint is not None:
         if os.path.exists(restore_checkpoint):
             logger.info(f"Restaurando trainer desde checkpoint: {restore_checkpoint}")
@@ -610,9 +592,8 @@ def main():
     history, last_checkpoint = train(trainer, num_iters=num_iterations)
     logger.info(f"Último checkpoint RLlib: {last_checkpoint}")
 
-    # CSV
-    os.makedirs("nuevo_con_lstm", exist_ok=True)
-    csv_path = "nuevo_con_lstm/ppo_results_agents.csv"
+    os.makedirs("nuevo_con_lstm_fc", exist_ok=True)
+    csv_path = "nuevo_con_lstm_fc/ppo_results_agents.csv"
     save_history_to_csv(history, csv_path)
 
     logger.info("\nEjecutando episodio de evaluación...")

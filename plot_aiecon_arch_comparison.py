@@ -39,7 +39,7 @@ def plot_comparison(csv_paths, labels, y_col, title, ylabel, out_path: Path, sho
         x, y = load_series(csv_path, y_col)
         plt.plot(x, y, linewidth=1.5, label=label)
 
-    plt.title(title)
+    # plt.title(title)
     plt.xlabel("timesteps")
     plt.ylabel(ylabel)
     plt.grid(True, linestyle="--", alpha=0.4)
@@ -82,34 +82,36 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
-    # 1) Free Market: reward de agentes (policy_a_reward_mean)
+    # 1) AI-Economist: reward de agentes (policy_a_reward_mean)
     # ------------------------------------------------------------------
-    fm_sin = base / "sin_lstm" / "free_market" / "ppo_results_agents.csv"
-    fm_con = base / "con_lstm" / "free_market" / "ppo_results_agents.csv"
+    fm_mlp = base / "mlp" / "ai_economist" / "ppo_results_with_planner.csv"
+    fm_lstm = base / "lstm+mlp" / "ai_economist" / "ppo_results_with_planner.csv"
+    fm_cnn = base / "cnn+mlp" / "ai_economist" / "ppo_results_with_planner.csv"
 
     plot_comparison(
-        csv_paths=[fm_sin, fm_con],
-        labels=["Sin LSTM", "Con LSTM"],
+        csv_paths=[fm_mlp, fm_lstm, fm_cnn],
+        labels=["MLP", "LSTM+MLP", "CNN+MLP"],
         y_col="policy_a_reward_mean",
-        title="Free Market – reward medio de agentes vs timesteps",
-        ylabel="Reward medio (policy a)",
-        out_path=outdir / "free_market_agents_lstm_vs_no_lstm.png",
+        title="AI-Economist – Policy a - mean reward vs timesteps",
+        ylabel="Mean reward (policy a)",
+        out_path=outdir / "ai_economist_agents_mlp_lstm_cnn.png",
         show=args.show,
     )
 
     # ------------------------------------------------------------------
     # 2) AI-Economist: reward del planner (policy_p_reward_mean)
     # ------------------------------------------------------------------
-    pl_sin = base / "sin_lstm" / "ai_economist" / "ppo_results_with_planner.csv"
-    pl_con = base / "con_lstm" / "ai_economist" / "ppo_results_with_planner.csv"
+    pl_mlp = base / "mlp" / "ai_economist" / "ppo_results_with_planner.csv"
+    pl_lstm = base / "lstm+mlp" / "ai_economist" / "ppo_results_with_planner.csv"
+    pl_cnn = base / "cnn+mlp" / "ai_economist" / "ppo_results_with_planner.csv"
 
     plot_comparison(
-        csv_paths=[pl_sin, pl_con],
-        labels=["Sin LSTM", "Con LSTM"],
+        csv_paths=[pl_mlp, pl_lstm, pl_cnn],
+        labels=["MLP", "LSTM+MLP", "CNN+MLP"],
         y_col="policy_p_reward_mean",
-        title="AI-Economist – reward medio del planner vs timesteps",
-        ylabel="Reward medio (policy p)",
-        out_path=outdir / "ai_economist_planner_lstm_vs_no_lstm.png",
+        title="AI-Economist – Policy p - mean reward vs timesteps",
+        ylabel="Mean reward (policy p)",
+        out_path=outdir / "ai_economist_planner_mlp_lstm_cnn.png",
         show=args.show,
     )
 

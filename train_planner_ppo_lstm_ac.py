@@ -118,11 +118,7 @@ class CustomLSTMPostFC(RecurrentNetwork, nn.Module):
     def __init__(self, obs_space, action_space, num_outputs, model_config, name):
         nn.Module.__init__(self)
         RecurrentNetwork.__init__(self, obs_space, action_space, num_outputs, model_config, name)
-
-        # Tamaño de memoria según config (default 128)
         self.cell_size = model_config.get("lstm_cell_size", 128)
-
-        # Dimensión de entrada aplanada
         input_dim = int(np.product(obs_space.shape))
 
         # 1) ENCODER: obs_flat -> 256
@@ -160,10 +156,8 @@ class CustomLSTMPostFC(RecurrentNetwork, nn.Module):
         inputs: [B, T, obs_dim]
         state: [h, c] donde h,c: [B, cell_size]
         """
-        # Encoder: [B,T,obs] -> [B,T,256]
         x = self.encoder(inputs)
 
-        # LSTM: [B,T,256] -> [B,T,cell_size]
         lstm_out, [h, c] = self.lstm(
             x, [torch.unsqueeze(state[0], 0), torch.unsqueeze(state[1], 0)]
         )
@@ -174,12 +168,10 @@ class CustomLSTMPostFC(RecurrentNetwork, nn.Module):
         # Crítico: value por paso de tiempo
         self._cur_value = self.critic_branch(lstm_out).squeeze(2)  # [B,T]
 
-        # Devolver último estado recurrente
         return logits, [torch.squeeze(h, 0), torch.squeeze(c, 0)]
 
     @override(RecurrentNetwork)
     def get_initial_state(self):
-        # Estado inicial en ceros (h, c) de tamaño cell_size
         return [
             torch.zeros(self.cell_size),
             torch.zeros(self.cell_size)
@@ -266,11 +258,8 @@ def build_multiagent_policies(env_obj, run_configuration):
     }
 
     def policy_mapping_fn(agent_id):
-        # IDs numéricos -> "a", ID "p" -> "p"
         return "a" if str(agent_id).isdigit() else "p"
 
-    # OJO: si querés congelar agentes en Fase 2, lo correcto sería ["p"].
-    # Mantengo tu lógica original:
     policies_to_train = ["p", "a"] if train_planner else ["a"]
 
     logger.info(f"Políticas configuradas - Train planner: {train_planner}")
@@ -390,7 +379,6 @@ def train(trainer, num_iters=5, planner=True):
     # ---- Guardar pesos al final (state_dicts) ----
     os.makedirs("checkpoints", exist_ok=True)
     os.makedirs("checkpoints/nuevo_con_lstm_ac", exist_ok=True)
-
     if planner:
         torch.save(
             trainer.get_policy("a").model.state_dict(),
@@ -433,7 +421,6 @@ def run_eval_episode(trainer, env_obj, max_steps=200):
     done = {"__all__": False}
     total_rewards = {agent_id: 0.0 for agent_id in obs.keys()}
 
-    # Estados LSTM por agente+policy
     lstm_states = {}
     for agent_id in obs.keys():
         policy_id = "a" if str(agent_id).isdigit() else "p"
@@ -526,17 +513,13 @@ def main(planner=True):
     general_cfg = run_configuration.get("general", {})
     train_planner_flag = general_cfg.get("train_planner", True)
 
-    # A) Reanudar desde checkpoint completo si existe
     if restore_checkpoint is not None and os.path.exists(restore_checkpoint):
         logger.info(f"Restaurando trainer (planner) desde checkpoint: {restore_checkpoint}")
         trainer.restore(restore_checkpoint)
 
     else:
-        # B) Si NO hay checkpoint, cargar pesos de Fase 1 (agentes) y opcionalmente planner previo
         restore_agents_path = general_cfg.get("restore_tf_weights_agents", "")
         restore_planner_path = general_cfg.get("restore_tf_weights_planner", "")
-
-        # Pesos de agentes Fase 1
         if restore_agents_path and os.path.exists(restore_agents_path):
             logger.info(f"Cargando pesos pre-entrenados de agentes desde: {restore_agents_path}")
             try:
@@ -552,8 +535,6 @@ def main(planner=True):
             if train_planner_flag:
                 logger.warning("Fase 2 activada (train_planner=True) pero no se encontraron pesos de agentes.")
                 logger.warning(f"  Path de agentes especificado: {restore_agents_path}")
-
-        # Pesos previos del planner (opcional)
         if restore_planner_path and os.path.exists(restore_planner_path):
             logger.info(f"Cargando pesos pre-entrenados de planner desde: {restore_planner_path}")
             try:
@@ -570,12 +551,10 @@ def main(planner=True):
     history, last_checkpoint = train(trainer, num_iters=num_iterations, planner=planner)
     logger.info(f"Último checkpoint RLlib (planner): {last_checkpoint}")
 
-    # Guardar historial
     os.makedirs("nuevo_con_lstm_ac", exist_ok=True)
     csv_path = "nuevo_con_lstm_ac/ppo_results_with_planner.csv"
     save_history_to_csv(history, csv_path)
 
-    # Evaluación
     logger.info("\nEjecutando episodio de evaluación...")
     episode_length = env_config.get("episode_length", 1000)
     run_eval_episode(trainer, env_obj, max_steps=episode_length)
