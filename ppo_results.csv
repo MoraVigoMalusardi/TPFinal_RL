@@ -1,2 +1,0 @@
-iteration,timesteps_total,episodes_total,episodes_this_iter,episode_reward_min,episode_reward_max,episode_reward_mean,episode_len_mean,policy_a_reward_mean,policy_a_reward_min,policy_a_reward_max,policy_p_reward_mean,policy_p_reward_min,policy_p_reward_max,kl_a,entropy_a
-1,8000,8,8,25.127876633486412,115.95631929142586,79.28781391529282,1000.0,15.675024241800124,-0.06971164112885075,44.870654779483544,16.58771694809233,2.1666666666689705,24.48488077715453,0.0006229199666863265,3.9113920710303565

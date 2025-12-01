@@ -7,7 +7,6 @@ import argparse
 import logging
 import warnings
 from ray.tune.logger import UnifiedLogger
-
 from ray.rllib.agents.ppo import PPOTrainer
 from tutorials.rllib.env_wrapper import RLlibEnvWrapper
 
@@ -79,7 +78,6 @@ def process_args():
         run_configuration["general"]["num_iterations"] = args.num_iters
         logger.info(f"Overriding general.num_iterations a {args.num_iters}")
 
-    # Devolvemos también el path del checkpoint (puede ser None)
     return run_configuration, args.run_dir, args.restore_checkpoint
 
 
@@ -161,22 +159,19 @@ def build_multiagent_policies(env_obj, run_configuration):
     agent_policy_config = run_configuration.get("agent_policy", {})
     planner_policy_config = run_configuration.get("planner_policy", {})
 
-    # En fase 1 lo natural es train_planner = False, solo se entrena "a"
     train_planner = general_config.get("train_planner", False)
 
-    # Modelo para agentes
     agent_model_cfg = agent_policy_config.get("model", {})
     agent_model = {
-        "fcnet_hiddens": agent_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_hiddens": agent_model_cfg.get("fcnet_hiddens", [256, 256]), 
         "fcnet_activation": agent_model_cfg.get("fcnet_activation", "tanh"),
         "use_lstm": agent_model_cfg.get("use_lstm", False), 
         "vf_share_layers": agent_model_cfg.get("vf_share_layers", False),
     }
 
-    # Modelo para planner (en fase 1 típicamente no se usa/entrena)
     planner_model_cfg = planner_policy_config.get("model", {})
     planner_model = {
-        "fcnet_hiddens": planner_model_cfg.get("fcnet_hiddens", [256, 256]),  # Usamos 2 capas fully-connected de 256 unidades con tanh
+        "fcnet_hiddens": planner_model_cfg.get("fcnet_hiddens", [256, 256]),  
         "fcnet_activation": planner_model_cfg.get("fcnet_activation", "tanh"),
         "use_lstm": planner_model_cfg.get("use_lstm", False), 
         "vf_share_layers": planner_model_cfg.get("vf_share_layers", False),
@@ -230,7 +225,6 @@ def build_multiagent_policies(env_obj, run_configuration):
         """
         return "a" if str(agent_id).isdigit() else "p"
 
-    # En fase 1 queremos entrenar solo "a" (salvo que explícitamente se diga lo contrario)
     policies_to_train = ["a"] if not train_planner else ["a", "p"]
 
     logger.info(f"Políticas configuradas - Train planner: {train_planner}")
@@ -287,7 +281,6 @@ def build_trainer_config(env_obj, run_configuration, env_config):
         "no_done_at_end": trainer_yaml_config.get("no_done_at_end", False),
     }
 
-    # Config específico del wrapper de AI-Economist
     env_wrapper_config = {
         "env_config_dict": env_config,
         "num_envs_per_worker": trainer_config["num_envs_per_worker"],
@@ -377,14 +370,12 @@ def train(trainer, num_iters=5):
 
     # ==== Guardar pesos de policies (state_dict) ====
     import torch
-
     os.makedirs("checkpoints", exist_ok=True)
     os.makedirs("checkpoints/nuevo_sin_lstm", exist_ok=True)
     torch.save(
         trainer.get_policy("a").model.state_dict(),
         "checkpoints/nuevo_sin_lstm/policy_a_weights.pt",
     )
-
     if "p" in trainer.workers.local_worker().policy_map:
         torch.save(
             trainer.get_policy("p").model.state_dict(),
@@ -498,7 +489,6 @@ def main():
     logger.info("Inicializando Ray...")
     ray.init(include_dashboard=False, log_to_driver=False)
 
-    # Logger de TensorBoard
     logger_creator = create_tb_logger_creator(run_dir)
 
     logger.info("Creando PPOTrainer (con TensorBoard)...")
@@ -510,7 +500,6 @@ def main():
 
     print(f"\nTensorBoard logs se están guardando en: {trainer.logdir}\n")
 
-    # ==== RESTAURAR CHECKPOINT COMPLETO (OPCIONAL) ====
     if restore_checkpoint is not None:
         if os.path.exists(restore_checkpoint):
             logger.info(f"Restaurando trainer desde checkpoint: {restore_checkpoint}")
@@ -524,7 +513,6 @@ def main():
     history, last_checkpoint = train(trainer, num_iters=num_iterations)
     logger.info(f"Último checkpoint RLlib: {last_checkpoint}")
 
-    # CSV
     os.makedirs("nuevo_sin_lstm", exist_ok=True)
     csv_path = "nuevo_sin_lstm/ppo_results_agents.csv"
     save_history_to_csv(history, csv_path)
